@@ -1,0 +1,12 @@
+{
+    "manifest_root_hex": "9f2c3e2a5f8d6b4c1e0f2233445566778899aabbccddeeff0011223344556677",
+    "n": 1024,
+    "tau": 2,
+    "col_roots_hex": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    ],
+    "notes": "This file pins transcript inputs only. The test derives alphas and queries from these inputs deterministically and checks sizes/ranges."
+  }
+  

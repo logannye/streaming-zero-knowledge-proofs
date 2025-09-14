@@ -1,0 +1,17 @@
+[package]
+name = "sezkp-vm-riscv"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Example VM adapter: RISC-V (stub)"
+publish = false
+
+[dependencies]
+anyhow = "1"
+hex = "0.4"
+sezkp-merkle = { path = "../sezkp-merkle" }
+sezkp-stark  = { path = "../sezkp-stark" }
+sezkp-trace  = { path = "../sezkp-trace" }
+sezkp-core   = { path = "../sezkp-core" }
+sezkp-crypto = { path = "../sezkp-crypto" }
+sezkp-fold = { path = "../sezkp-fold" }

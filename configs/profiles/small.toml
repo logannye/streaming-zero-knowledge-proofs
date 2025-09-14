@@ -1,0 +1,4 @@
+t = 64        # total steps
+b = 4         # steps per σ_k
+tau = 2       # work tapes
+repeats = 3   # pipeline repetitions

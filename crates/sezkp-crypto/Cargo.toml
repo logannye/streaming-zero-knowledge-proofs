@@ -1,0 +1,10 @@
+[package]
+name = "sezkp-crypto"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+description = "SEZKP crypto substrate: hash traits and a simple transcript/RO"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1.5"

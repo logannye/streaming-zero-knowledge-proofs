@@ -1,0 +1,11 @@
+# demo RV-like program (illustrative only)
+# Our tiny VM steps one cell per instruction;
+# every 4th step writes on tape1. This file is not parsed—it's just a placeholder
+# so the example directory mirrors a "real" project layout.
+addi x1, x1, 1
+addi x1, x1, 1
+addi x1, x1, 1
+sw   x1, 0(x0)
+beq  x1, x0, +2
+addi x1, x1, 1
+jal  x0, -3

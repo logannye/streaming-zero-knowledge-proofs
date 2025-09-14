@@ -1,0 +1,3 @@
+# Proof Artifacts
+
+(Placeholder)

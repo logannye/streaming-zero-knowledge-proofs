@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+
+# Core crates we will implement first
+members = [
+    "crates/sezkp-core",
+    "crates/sezkp-scheduler",
+    "crates/sezkp-trace",
+    "crates/sezkp-cli",
+    "crates/sezkp-merkle",
+    "crates/sezkp-crypto",
+    "crates/sezkp-ffts",
+    "crates/sezkp-stark",
+    "crates/sezkp-fold",
+    "crates/*",
+    "benchmarks/harness",
+    "crates/sezkp-scheduler",
+    "crates/sezkp-fold",
+]
+
+[workspace.package]
+edition = "2021"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_imports = "deny"
+unused_must_use = "deny"
+rust_2018_idioms = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "allow"   # you can tighten later
+nursery = "allow"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"

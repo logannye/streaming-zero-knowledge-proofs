@@ -1,0 +1,25 @@
+[package]
+name = "sezkp-bench-harness"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+hex = "0.4"
+
+# Workspace crates
+sezkp-core = { path = "../../crates/sezkp-core" }
+sezkp-trace = { path = "../../crates/sezkp-trace" }
+sezkp-merkle = { path = "../../crates/sezkp-merkle" }
+sezkp-stark = { path = "../../crates/sezkp-stark" }
+sezkp-fold = { path = "../../crates/sezkp-fold" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3

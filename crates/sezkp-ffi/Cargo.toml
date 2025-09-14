@@ -1,0 +1,20 @@
+[package]
+name = "sezkp-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "C ABI (FFI) for SEZKP (stub by default; enable 'cabi' feature to export C symbols)"
+publish = false
+
+[lib]
+# rlib only by default; you can add "cdylib" when enabling the C ABI later
+crate-type = ["rlib"]
+
+[features]
+# When you’re ready to export a dynamic C ABI, enable this feature and (optionally)
+# switch crate-type to include "cdylib".
+cabi = []
+
+[dependencies]
+anyhow = "1"
+sezkp-core = { path = "../sezkp-core" }

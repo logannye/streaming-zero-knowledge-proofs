@@ -1,0 +1,8 @@
+backend = "folding"         # "folding" | "stark"
+mode = "balanced"           # "balanced" | "minram"
+b = 1048576                 # block size in steps
+wrap_cadence = 4096         # folding wrap cadence
+transcript = "merlin"
+commitment = "poseidon"
+field = "bn254"
+rng = "chacha20"

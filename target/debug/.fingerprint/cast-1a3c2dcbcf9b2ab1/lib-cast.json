@@ -1,0 +1,1 @@
+{"rustc":12610991425282158916,"features":"[]","declared_features":"[\"std\"]","target":5545552490577062777,"profile":5347358027863023418,"path":9126325805473363576,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"debug/.fingerprint/cast-1a3c2dcbcf9b2ab1/dep-lib-cast","checksum":false}}],"rustflags":["-C","target-cpu=native"],"config":2069994364910194474,"compile_kind":0}

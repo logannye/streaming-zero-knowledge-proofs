@@ -1,0 +1,24 @@
+[package]
+name = "sezkp-py"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Python bindings for SEZKP (feature-gated; off by default)"
+publish = false
+
+[lib]
+# Default to a normal Rust library so workspace builds cleanly.
+# When publishing a Python extension, you can build with:
+#   cargo build -p sezkp-py --features python --release
+crate-type = ["rlib"]
+
+[features]
+# Enable to compile a CPython extension module.
+python = ["dep:pyo3"]
+
+[dependencies]
+anyhow = "1"
+sezkp-core = { path = "../sezkp-core" }
+
+# Optional; only compiled if `python` feature is enabled
+pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"], optional = true }

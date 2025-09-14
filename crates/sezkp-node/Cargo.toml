@@ -1,0 +1,23 @@
+[package]
+name = "sezkp-node"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Node.js bindings for SEZKP (feature-gated; off by default)"
+publish = false
+
+[lib]
+# Default to rlib; build a Node addon when `node` feature is enabled.
+crate-type = ["rlib"]
+
+[features]
+# Enable to compile a N-API addon. This is off by default to avoid requiring Node toolchain.
+node = ["dep:napi", "dep:napi-derive"]
+
+[dependencies]
+anyhow = "1"
+sezkp-core = { path = "../sezkp-core" }
+
+# Optional deps; only compiled with `--features node`
+napi = { version = "2", default-features = false, features = ["napi4"], optional = true }
+napi-derive = { version = "2", optional = true }

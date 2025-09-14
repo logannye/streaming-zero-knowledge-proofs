@@ -1,0 +1,10 @@
+[package]
+name = "sezkp-scheduler"
+version = "0.1.0"
+edition = "2021"
+description = "Balanced recursion + pointerless DFS event scheduler for SEZKP"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+sezkp-core = { path = "../sezkp-core" }

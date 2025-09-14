@@ -1,0 +1,12 @@
+[package]
+name = "sezkp-trace"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ciborium = "0.2"
+sezkp-core = { path = "../sezkp-core" }
+rand = "0.9"
