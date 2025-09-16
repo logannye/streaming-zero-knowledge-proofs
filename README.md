@@ -1,4 +1,4 @@
-# SEZKP — Streaming, Sublinear-Space ZKP (reference implementation)
+# SEZKP — Space-Efficient Zero-Knowledge Proofs
 
 SEZKP is a reference pipeline for **streaming** proof generation & verification over long traces using **sublinear memory**. It includes:
 
