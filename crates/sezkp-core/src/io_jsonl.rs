@@ -1,8 +1,16 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
+//! JSON Lines (NDJSON) helpers for streaming `BlockSummary` I/O.
+//!
+//! These functions provide memory-efficient line-by-line reading/writing
+//! suitable for very large inputs. Each line is a single JSON object.
+//!
+//! - **Reader**: returns `Iterator<Item = Result<BlockSummary>>` so callers can
+//!   surface per-line errors without losing the stream.
+//! - **Writer**: uses `serde_json::to_writer` to avoid intermediate allocations.
+//!
+//! # Formats
+//! We treat both `.jsonl` and `.ndjson` as equivalent line-delimited JSON.
 
 use anyhow::{Context, Result};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -13,6 +21,12 @@ use crate::BlockSummary;
 /// Stream read: one JSON object per line → yields `BlockSummary` items.
 ///
 /// This is resilient to large inputs: we only materialize one block at a time.
+/// Each line is parsed independently; the iterator yields `Err` with a line
+/// number if parsing fails.
+///
+/// # Errors
+/// Opening the file may fail. Individual iteration items may be `Err` if a
+/// particular line is malformed.
 pub fn stream_block_summaries_jsonl<P: AsRef<Path>>(
     path: P,
 ) -> Result<impl Iterator<Item = Result<BlockSummary>>> {
@@ -33,6 +47,8 @@ pub fn stream_block_summaries_jsonl<P: AsRef<Path>>(
 }
 
 /// Write blocks as JSON Lines (one object per line).
+///
+/// Uses `serde_json::to_writer` directly to avoid temporary `String`s.
 pub fn write_block_summaries_jsonl<P: AsRef<Path>>(
     path: P,
     blocks: &[BlockSummary],
@@ -41,8 +57,7 @@ pub fn write_block_summaries_jsonl<P: AsRef<Path>>(
         .with_context(|| format!("create {}", path.as_ref().display()))?;
     let mut w = BufWriter::new(f);
     for b in blocks {
-        let line = serde_json::to_string(b).context("serialize block to json")?;
-        w.write_all(line.as_bytes()).context("write jsonl line")?;
+        serde_json::to_writer(&mut w, b).context("serialize block to json")?;
         w.write_all(b"\n").context("write newline")?;
     }
     w.flush().context("flush writer")?;
@@ -55,8 +70,7 @@ pub fn write_jsonl<P: AsRef<Path>, T: Serialize>(path: P, items: &[T]) -> Result
         .with_context(|| format!("create {}", path.as_ref().display()))?;
     let mut w = BufWriter::new(f);
     for it in items {
-        let line = serde_json::to_string(it).context("serialize jsonl item")?;
-        w.write_all(line.as_bytes()).context("write jsonl line")?;
+        serde_json::to_writer(&mut w, it).context("serialize jsonl item")?;
         w.write_all(b"\n").context("write newline")?;
     }
     w.flush().context("flush writer")?;

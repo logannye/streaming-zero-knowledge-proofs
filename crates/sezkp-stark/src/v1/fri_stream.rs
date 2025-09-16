@@ -103,14 +103,16 @@ impl StreamingLayerBuilder {
             self.seen, self.expected_len
         );
 
-        // Odd promotions: carry lone nodes up unchanged.
-        // The root is the left-to-right reduction of remaining nodes over levels.
+        // Reduce remaining nodes from highest level down, treating the higher
+        // level node as the *left* input and the accumulated hash as the *right*.
+        // This matches odd-promotion semantics, e.g. for 3 leaves:
+        // stack[0]=c, stack[1]=hash(a,b) ⇒ root = hash(hash(a,b), c).
         let mut cur: Option<[u8; 32]> = None;
-        for opt in self.stack.into_iter() {
+        for opt in self.stack.into_iter().rev() {
             if let Some(node) = opt {
                 cur = Some(match cur {
                     None => node,
-                    Some(acc) => hash_nodes(&acc, &node),
+                    Some(acc) => hash_nodes(&node, &acc),
                 });
             }
         }

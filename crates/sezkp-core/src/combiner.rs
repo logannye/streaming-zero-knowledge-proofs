@@ -1,5 +1,3 @@
-// crates/sezkp-core/src/combiner.rs
-
 //! Constant-size finite-state combiner and interface checks.
 //!
 //! A [`Combiner`] reduces two adjacent interval finite-states into their parent’s
@@ -11,8 +9,14 @@
 //! - The interface between the left (prefix) and right (suffix) states must be
 //!   valid: control must chain, input head position must match, and each work-
 //!   tape head must match (`left.out == right.in`).
-//! - Callers are responsible for checking interface validity before `combine`.
+//! - Callers are responsible for checking interface validity before `combine`,
+//!   or they may use [`Combiner::combine_checked`] which enforces it.
+//!
+//! ## Determinism
+//! This module performs only pure, deterministic field copies and boolean checks.
+//! Any vector padding is zero-filled and documented below.
 
+use anyhow::{bail, Result};
 use crate::types::FiniteState;
 
 /// A combiner operates on the constant-size finite-state projection.
@@ -23,7 +27,10 @@ pub trait Combiner {
     /// Merge two adjacent interval finite-states into the parent's finite-state.
     ///
     /// # Preconditions
-    /// The interface between `left` and `right` has been validated.
+    /// The interface between `left` and `right` has been validated (e.g., via
+    /// [`Combiner::interface_ok`] or by a higher-level exact replay check).
+    ///
+    /// Implementations may contain `debug_assert!`s but must not panic in release.
     #[must_use]
     fn combine(&self, left: &FiniteState, right: &FiniteState) -> FiniteState;
 
@@ -33,6 +40,21 @@ pub trait Combiner {
     /// for input head and each work-tape head; control state must chain.
     #[must_use]
     fn interface_ok(&self, left: &FiniteState, right: &FiniteState) -> bool;
+
+    /// Merge two states, returning an error if the interface is invalid.
+    ///
+    /// This is a convenience wrapper that avoids the "check-then-use" race in callers and
+    /// centralizes the error message for debugging.
+    ///
+    /// # Errors
+    /// Returns `Err` if [`Combiner::interface_ok`] is false.
+    #[inline]
+    fn combine_checked(&self, left: &FiniteState, right: &FiniteState) -> Result<FiniteState> {
+        if !self.interface_ok(left, right) {
+            bail!("invalid interface: left.out does not match right.in (control/head continuity)");
+        }
+        Ok(self.combine(left, right))
+    }
 }
 
 /// A trivial combiner that preserves entry state from the left and exit state from the right,
@@ -52,9 +74,14 @@ impl ConstantCombiner {
 impl Combiner for ConstantCombiner {
     #[inline]
     fn combine(&self, left: &FiniteState, right: &FiniteState) -> FiniteState {
-        // Precondition (enforced separately by interface_ok): left.out matches right.in
+        // Precondition (enforced separately by interface_ok or combine_checked):
+        // left.out must match right.in. In debug builds, assert to catch misuse early.
+        debug_assert!(
+            self.interface_ok(left, right),
+            "ConstantCombiner::combine called with mismatched interface"
+        );
 
-        // Determine target arity for work-tape head vectors; pad defensively.
+        // Determine target arity for work-tape head vectors; pad defensively with zeros.
         let tau = left.work_head_in.len().max(right.work_head_out.len());
 
         let mut fs = FiniteState::default();
@@ -73,7 +100,7 @@ impl Combiner for ConstantCombiner {
         fs.flags = left.flags ^ right.flags;
         fs.tag = right.tag;
 
-        // Ensure vector lengths are consistent (pad with zeros if needed; defensive).
+        // Ensure vector lengths are consistent (pad with zeros if needed).
         if fs.work_head_in.len() != tau {
             fs.work_head_in.resize(tau, 0);
         }
@@ -168,5 +195,17 @@ mod tests {
         r.work_head_in = vec![1, 2];
         let comb = ConstantCombiner::new();
         assert!(!comb.interface_ok(&l, &r));
+    }
+
+    #[test]
+    fn combine_checked_returns_error_on_mismatch() {
+        let mut l = FiniteState::default();
+        let mut r = FiniteState::default();
+        l.ctrl_out = 10;
+        r.ctrl_in = 11; // mismatch
+
+        let comb = ConstantCombiner::new();
+        let res = comb.combine_checked(&l, &r);
+        assert!(res.is_err());
     }
 }

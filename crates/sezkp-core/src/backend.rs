@@ -1,9 +1,7 @@
-// crates/sezkp-core/src/backend.rs
-
 //! Backend abstraction for proving and verification.
 //!
 //! Implementors provide a *stateless* API (associated functions) that take
-//! block summaries and a `manifest_root` and either produce a `ProofArtifact`
+//! block summaries and a `manifest_root` and either produce a [`ProofArtifact`]
 //! or verify one. This keeps the call surface stable across CLI/FFI/Python.
 //!
 //! ## Contracts implementors should uphold
@@ -46,6 +44,7 @@ pub trait ProvingBackend {
     /// # Errors
     /// Returns an error if the backend cannot construct a proof (e.g., invalid
     /// block summaries, inconsistent parameters, internal constraint failure).
+    #[must_use]
     fn prove(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<ProofArtifact>;
 
     /// Verify a previously generated proof against `blocks` and `manifest_root`.
@@ -53,6 +52,7 @@ pub trait ProvingBackend {
     /// # Errors
     /// Returns an error if the proof is invalid for the provided inputs or the
     /// internal checks fail (e.g., root mismatch, malformed encoding).
+    #[must_use]
     fn verify(
         artifact: &ProofArtifact,
         blocks: &[BlockSummary],

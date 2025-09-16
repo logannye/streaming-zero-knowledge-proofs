@@ -1,7 +1,8 @@
 //! Verifier-side recomputation for v0.
 //!
-//! We recompute the same streaming commitment and re-derive Fiat–Shamir
-//! challenges; the “proof” is those challenge bytes.
+//! The v0 “proof” is just two 32-byte challenges derived from a transcript
+//! that binds the manifest root and the streaming commit of the row witness.
+//! To verify, we recompute the same transcript and check the bytes match.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -21,18 +22,26 @@ use sezkp_crypto::{Blake3Transcript, Transcript};
 use crate::commit::commit_blocks;
 
 /// Verify a v0 STARK artifact by recomputing the transcript challenges.
+///
+/// This performs the **same** streaming commitment over the blocks as the
+/// prover, then re-derives the `alpha`/`beta` challenge bytes and compares
+/// them with `artifact.proof_bytes`.
 pub fn verify_artifact(
     art: &ProofArtifact,
     blocks: &[BlockSummary],
     manifest_root: [u8; 32],
 ) -> Result<()> {
+    // 1) Recompute the streaming commit (includes minimal AIR checks).
     let com = commit_blocks(blocks)?;
+
+    // 2) Rebuild the Fiat–Shamir transcript.
     let mut tr = Blake3Transcript::new("sezkp-stark-v0");
     tr.absorb("manifest_root", &manifest_root);
     tr.absorb("commit_root", &com.root);
     tr.absorb_u64("n_rows", com.n_rows);
     tr.absorb_u64("tau", com.tau as u64);
 
+    // 3) Expected “proof bytes”.
     let mut expected = Vec::with_capacity(64);
     expected.extend(tr.challenge_bytes("alpha", 32));
     expected.extend(tr.challenge_bytes("beta", 32));
@@ -50,7 +59,10 @@ mod tests {
     use sezkp_core::{MovementLog, StepProjection, TapeOp, Window};
 
     fn mk_block(block_id: u32, len: usize) -> BlockSummary {
-        let steps = vec![StepProjection { input_mv: 0, tapes: vec![TapeOp { write: None, mv: 0 }] }; len];
+        let steps = vec![
+            StepProjection { input_mv: 0, tapes: vec![TapeOp { write: None, mv: 0 }] };
+            len
+        ];
         BlockSummary {
             version: 1,
             block_id,

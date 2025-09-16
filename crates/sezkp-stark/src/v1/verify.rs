@@ -6,8 +6,8 @@
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
-#![allow(unused_imports)]
 #![warn(
+    missing_docs,
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
@@ -56,8 +56,10 @@ fn verify_opening(
     Ok(())
 }
 
+/// Verify a v1 proof end-to-end against block metadata (τ) and transcript schedule.
 pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
-    // ---- Shape only (no full trace rebuild) ---------------------------------
+    /* -------------------------- Shape & sanity checks ----------------------- */
+
     let blow = params::BLOWUP;
     ensure!(blow.is_power_of_two(), "BLOWUP must be a power of two");
     ensure!(
@@ -66,8 +68,8 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
     );
     let n = proof.domain_n / blow;
     ensure!(n.is_power_of_two(), "trace length n must be a power of two");
-    let tau = proof.tau;
 
+    let tau = proof.tau;
     if let Some(b0) = blocks.first() {
         ensure!(
             b0.windows.len() == tau,
@@ -77,7 +79,8 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         );
     }
 
-    // ---- Transcript prelude + bind column roots -----------------------------
+    /* --------------------- Transcript prelude + col roots ------------------- */
+
     let mut tr = Blake3Transcript::new(params::DS_V1_DOMAIN);
     tr.absorb("manifest_root", &proof.manifest_root);
     tr.absorb_u64("n", n as u64);
@@ -87,7 +90,8 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         tr.absorb(params::DS_COL_ROOT, &cr.root);
     }
 
-    // ---- Alphas --------------------------------------------------------------
+    /* -------------------------------- Alphas -------------------------------- */
+
     let a = params::derive_alphas(&mut tr);
     let alphas = Alphas {
         bool_flag: a[0],
@@ -103,14 +107,16 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         boundary_last: a[2],
     };
 
-    // ---- ZK mask draws (alignment only; not used in openings check) ---------
+    /* ------------- ZK mask draws (alignment only; not used directly) -------- */
+
     let _mask_coeffs = derive_mask_coeffs(&mut tr, DEFAULT_MASK_DEG, DEFAULT_N_MASKS);
 
-    // ---- Force transcript alignment up to AIR row sampling ------------------
-    // Prover consumed an OOD challenge before binding FRI roots & betas.
+    /* --------- Keep transcript alignment up to AIR row sampling ------------- */
+
+    // Prover derived an OOD point before binding FRI roots; mirror that.
     let _z_sync = params::derive_ood_point(&mut tr);
 
-    // Mirror: absorb FRI roots and draw betas before deriving AIR row queries.
+    // For AIR row queries, the prover had already absorbed FRI roots and betas.
     let n_layers = proof.fri_roots.roots.len();
     let mut tr_rows = tr.clone();
     if n_layers > 0 {
@@ -120,7 +126,8 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
             tr_rows.absorb(params::DS_FRI_LAYER_ROOT, &proof.fri_roots.roots[r]);
         }
     }
-    // Derive the AIR query rows from the transcript and enforce they match.
+
+    // Derive expected AIR query rows and cross-check with the proof.
     let expected_rows = params::derive_queries(&mut tr_rows, n, params::NUM_QUERIES);
     ensure!(
         expected_rows.len() == proof.queries.len(),
@@ -138,7 +145,8 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         );
     }
 
-    // ---- Verify openings + AIR directly from openings -----------------------
+    /* --------------------- Verify openings + AIR constraints ---------------- */
+
     let root_map: HashMap<_, _> = proof
         .col_roots
         .iter()
@@ -151,7 +159,7 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         verify_opening(&root_map, "is_first", &q.is_first)?;
         verify_opening(&root_map, "is_last", &q.is_last)?;
 
-        // Per-tape
+        // Per-tape columns
         for (r, t) in q.per_tape.iter().enumerate() {
             verify_opening(&root_map, &format!("mv_{r}"), &t.mv)?;
             verify_opening(&root_map, &format!("mv_{r}"), &t.next_mv)?;
@@ -164,6 +172,7 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
             verify_opening(&root_map, &format!("out_off_{r}"), &t.out_off)?;
         }
 
+        // Recompute AIR composition from the opened values.
         let rv = RowView::from_openings(q);
         let c =
             compose_row_from_openings(&rv, &alphas) + compose_boundary_from_openings(&rv, &alphas);
@@ -172,9 +181,11 @@ pub fn verify_v1(proof: &ProofV1, blocks: &[BlockSummary]) -> Result<()> {
         }
     }
 
-    // ---- FRI checks (on a transcript aligned to the prover for betas) -------
+    /* ------------------------------ FRI checks ------------------------------ */
+
+    // Run FRI verification on a transcript aligned with the prover (for betas).
     let mut tr_fri = tr;
-    crate::v1::fri::fri_verify(
+    fri_verify(
         &mut tr_fri,
         &proof.fri_roots.roots,
         &proof.fri_queries,

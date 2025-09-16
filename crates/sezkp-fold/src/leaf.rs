@@ -1,14 +1,9 @@
 //! Concrete Leaf gadget: π-consistency proof + transcript binding.
 //!
-//! Leaf commitment **must** match `sezkp-merkle::leaf_hash` exactly:
-//!   - raw little-endian fields in the same order
-//!   - windows.len() then each {left,right}
-//!   - head_in_offsets values, then head_out_offsets values (no lengths)
-//!   - movement_log.steps.len()
-//!   - NO domain tag, NO CBOR, NO pre/post tags
-//!
+//! Leaf commitment **must** match `sezkp_merkle::leaf_hash` exactly.
 //! The proof consists of a micro-proof binding the π limbs + boundary digests
-//! and an outer transcript MAC under `DS_LEAF` that binds (C, π, digests, proof).
+//! and an outer transcript MAC under `DS_LEAF` that binds
+//! `(C, π-commitment, digests, proof)`.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -20,64 +15,36 @@
     clippy::expect_used
 )]
 
-use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 use sezkp_core::BlockSummary;
 use sezkp_crypto::{Blake3Transcript, Transcript};
+use sezkp_merkle::leaf_hash;
 
-use crate::api::{Commitment, Leaf, DS_LEAF};
+use crate::api::{commit_pi, Commitment, Leaf, PiCommitment, DS_LEAF};
 use crate::are::Pi;
 
 use sezkp_stark::v1::air::{prove_leaf_pi, verify_leaf_pi, PiPublic, StarkProofV1};
 use sezkp_stark::v1::field::F1;
 
 /// Proof object for the leaf.
+///
+/// - `public` are the public inputs seen by the micro-proof circuit
+///   (π limbs + boundary digests).
+/// - `proof` is the micro-proof attesting those public inputs.
+/// - `mac` binds everything (including the micro-proof bytes) to the transcript
+///   domain `DS_LEAF`, so the caller doesn't have to re-hash.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CryptoLeafProof {
-    /// Public inputs to LeafPiAir (π limbs + boundary digests)
+    /// Public inputs to LeafPiAir (π limbs + boundary digests).
     pub public: PiPublic,
-    /// Compact commitment (MAC) to `public`
+    /// Micro-proof over `public`.
     pub proof: StarkProofV1,
-    /// Outer transcript MAC under `DS_LEAF` (binds C, π, digests, proof)
+    /// Outer transcript MAC under `DS_LEAF` (binds C, π-commitment, digests, proof).
     pub mac: [u8; 32],
 }
 
-/// Byte-for-byte replica of `sezkp_merkle::leaf_hash`.
-fn commit_block(block: &BlockSummary) -> [u8; 32] {
-    let mut h = Hasher::new();
-
-    // Core scalars
-    h.update(&block.version.to_le_bytes());   // u16
-    h.update(&block.block_id.to_le_bytes());  // u32
-    h.update(&block.step_lo.to_le_bytes());   // u64
-    h.update(&block.step_hi.to_le_bytes());   // u64
-    h.update(&block.ctrl_in.to_le_bytes());   // u16
-    h.update(&block.ctrl_out.to_le_bytes());  // u16
-    h.update(&block.in_head_in.to_le_bytes());  // i64
-    h.update(&block.in_head_out.to_le_bytes()); // i64
-
-    // Windows: length, then each (left, right)
-    h.update(&(block.windows.len() as u64).to_le_bytes());
-    for w in &block.windows {
-        h.update(&w.left.to_le_bytes());   // i64
-        h.update(&w.right.to_le_bytes());  // i64
-    }
-
-    // Head offsets: values only (no lengths)
-    for &x in &block.head_in_offsets {
-        h.update(&x.to_le_bytes()); // u32
-    }
-    for &x in &block.head_out_offsets {
-        h.update(&x.to_le_bytes()); // u32
-    }
-
-    // Movement log length (bind geometry only, not the log contents)
-    h.update(&(block.movement_log.steps.len() as u64).to_le_bytes());
-
-    *h.finalize().as_bytes()
-}
-
 /// Assemble a `Pi` from `PiPublic` (pack limbs into 4 F1 registers).
+#[inline]
 fn pi_from_public(p: &PiPublic) -> Pi {
     let mut pi = Pi::default();
     pi.ctrl_in = p.ctrl_in;
@@ -89,48 +56,28 @@ fn pi_from_public(p: &PiPublic) -> Pi {
     pi
 }
 
-/// Rebuild the public π view from a `Pi` (extract the 4 limbs).
-fn public_from_pi(pi: &Pi, left_tail_digest: [u8; 32], right_head_digest: [u8; 32]) -> PiPublic {
-    let mut limbs = [0u64; 4];
-    for i in 0..4 {
-        limbs[i] = u64::from_le_bytes(pi.acc[i].to_le_bytes());
-    }
-    PiPublic {
-        ctrl_in: pi.ctrl_in,
-        ctrl_out: pi.ctrl_out,
-        flags: pi.flags,
-        acc_limbs: limbs,
-        left_tail_digest,
-        right_head_digest,
-    }
-}
-
-/// Concrete Leaf gadget.
+/// Concrete Leaf gadget (V2).
 pub struct CryptoLeaf;
 
 impl Leaf for CryptoLeaf {
     type Proof = CryptoLeafProof;
 
     fn prove_leaf(block: &BlockSummary) -> (Pi, Commitment, Self::Proof) {
-        // 1) Inner micro-proof: produces public view + MAC
+        // 1) Inner micro-proof: produces public view + proof
         let (public, inner) = prove_leaf_pi(block).expect("leaf π proof");
 
-        // 2) Assemble π from the public view (independent prefixes already packed)
+        // 2) Assemble π from the public view
         let pi = pi_from_public(&public);
 
         // 3) Manifest-compatible commitment to the block's public shape
-        let c = Commitment::new(commit_block(block), 1);
+        let c = Commitment::new(leaf_hash(block), 1);
 
-        // 4) Outer transcript MAC binding (C, π, boundary digests, inner proof MAC)
+        // 4) Outer transcript MAC binding (C, π-commitment, boundary digests, micro-proof)
+        let pi_cmt = commit_pi(&pi);
         let mut tr = Blake3Transcript::new(DS_LEAF);
         tr.absorb("c.root", &c.root);
         tr.absorb_u64("c.len", c.len as u64);
-        tr.absorb_u64("pi.ctrl_in", pi.ctrl_in as u64);
-        tr.absorb_u64("pi.ctrl_out", pi.ctrl_out as u64);
-        tr.absorb_u64("pi.flags", pi.flags as u64);
-        for (i, a) in pi.acc.iter().enumerate() {
-            tr.absorb(&format!("pi.acc[{i}]"), &a.to_le_bytes());
-        }
+        tr.absorb("pi.commit", &pi_cmt.0);
         tr.absorb("left_tail", &public.left_tail_digest);
         tr.absorb("right_head", &public.right_head_digest);
         tr.absorb("leaf_pi.mac", &inner.mac);
@@ -142,14 +89,11 @@ impl Leaf for CryptoLeaf {
         (pi, c, CryptoLeafProof { public, proof: inner, mac })
     }
 
-    fn verify_leaf(commit: &Commitment, pi: &Pi, proof: &Self::Proof) -> bool {
-        // 1) Public view must match the provided π limbs/flags/ctrl_*.
-        let rebuilt = public_from_pi(
-            pi,
-            proof.public.left_tail_digest,
-            proof.public.right_head_digest,
-        );
-        if rebuilt != proof.public {
+    // Verifier sees only the π commitment, not the raw π.
+    fn verify_leaf(commit: &Commitment, pi_cmt: &PiCommitment, proof: &Self::Proof) -> bool {
+        // 1) Reconstruct π from the public inputs and check its commitment.
+        let pi_rebuilt = pi_from_public(&proof.public);
+        if commit_pi(&pi_rebuilt) != *pi_cmt {
             return false;
         }
 
@@ -158,16 +102,11 @@ impl Leaf for CryptoLeaf {
             return false;
         }
 
-        // 3) Rebuild the outer transcript and check the MAC.
+        // 3) Rebuild the outer transcript and check the MAC (binding to π commitment).
         let mut tr = Blake3Transcript::new(DS_LEAF);
         tr.absorb("c.root", &commit.root);
         tr.absorb_u64("c.len", commit.len as u64);
-        tr.absorb_u64("pi.ctrl_in", pi.ctrl_in as u64);
-        tr.absorb_u64("pi.ctrl_out", pi.ctrl_out as u64);
-        tr.absorb_u64("pi.flags", pi.flags as u64);
-        for (i, a) in pi.acc.iter().enumerate() {
-            tr.absorb(&format!("pi.acc[{i}]"), &a.to_le_bytes());
-        }
+        tr.absorb("pi.commit", &pi_cmt.0);
         tr.absorb("left_tail", &proof.public.left_tail_digest);
         tr.absorb("right_head", &proof.public.right_head_digest);
         tr.absorb("leaf_pi.mac", &proof.proof.mac);

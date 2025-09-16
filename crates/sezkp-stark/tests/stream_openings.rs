@@ -1,11 +1,12 @@
+//! Streaming openings: spot-check a bunch of (row, column) pairs.
+//!
+//! We build streamed column roots and then request on-demand openings for
+//! random rows/columns, verifying each opening against the appropriate root.
+
 #![allow(clippy::unwrap_used)]
 
 use sezkp_core::{BlockSummary, MovementLog, StepProjection, TapeOp, Window};
-use sezkp_stark::v1::{
-    merkle::verify_chunked_open,
-    openings::OnDemandOpenings,
-    params,
-};
+use sezkp_stark::v1::{merkle::verify_chunked_open, openings::OnDemandOpenings, params};
 
 fn demo_blocks(t: usize) -> Vec<BlockSummary> {
     let mut steps = Vec::with_capacity(t);
@@ -46,15 +47,15 @@ fn demo_blocks(t: usize) -> Vec<BlockSummary> {
 fn on_demand_openings_verify_for_many_rows_and_columns() {
     let blocks = demo_blocks(64);
 
-    // Build streaming roots
+    // Build streaming roots.
     let mut odo = OnDemandOpenings::new(&blocks, params::COL_CHUNK_LOG2);
     let roots = odo.build_roots();
 
-    // Build a label->root map for quick verify
+    // Build a label->root map for quick verify.
     let root_map: std::collections::HashMap<_, _> =
         roots.iter().map(|r| (r.label.clone(), r.root)).collect();
 
-    // Labels are in the streaming order used by the builder
+    // Labels are in the streaming order used by the builder.
     let tau = 1usize;
     let mut labels = vec!["input_mv".to_string(), "is_first".into(), "is_last".into()];
     for r in 0..tau {
@@ -79,7 +80,7 @@ fn on_demand_openings_verify_for_many_rows_and_columns() {
         labels.push(format!("out_off_{r}"));
     }
 
-    // Deterministic pseudo-random sampler
+    // Deterministic pseudo-random sampler (xorshift).
     let mut x = 0x9e3779b97f4a7c15u64;
     let mut rnd = || {
         x ^= x << 7;
@@ -87,7 +88,7 @@ fn on_demand_openings_verify_for_many_rows_and_columns() {
         (x % 64) as usize
     };
 
-    // Test 32 random (row, col) pairs
+    // Test 32 random (row, col) pairs.
     for _ in 0..32 {
         let row = rnd();
         let col_i = rnd() % labels.len();

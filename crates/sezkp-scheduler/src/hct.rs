@@ -1,6 +1,12 @@
-// crates/sezkp-scheduler/src/hct.rs
-
-//! Balanced (midpoint) recursion utilities over `[1, T]`.
+//! Balanced (midpoint) recursion utilities over inclusive intervals `[1, T]`.
+//!
+//! This helper mirrors the “height-compressed tree” used throughout the codebase.
+//! It provides:
+//! - `ceil_log2_u32`: tiny ceil-log helper
+//! - `children`: split an inclusive `[i, j]` into `( [i, m], [m+1, j] )`
+//! - `depth_bound`: theoretical recursion depth bound for `T` leaves
+//!
+//! Used by `dfs.rs` to compute balanced splits during pointerless DFS.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -26,7 +32,7 @@ pub fn ceil_log2_u32(x: u32) -> u32 {
     }
 }
 
-/// Midpoint split of an interval `[i, j]` with `i ≤ j`.
+/// Midpoint split of an inclusive interval `[i, j]` with `i ≤ j`.
 #[inline]
 #[must_use]
 pub fn children(iv: Interval) -> (Interval, Interval) {

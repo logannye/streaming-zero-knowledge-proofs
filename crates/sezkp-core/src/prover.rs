@@ -30,7 +30,7 @@ pub trait ProvingBackendStream {
 }
 
 /// A generic prover that can operate either in batch (slice) mode or in
-/// streaming mode (when the backend implements `ProvingBackendStream`).
+/// streaming mode (when the backend implements [`ProvingBackendStream`]).
 #[derive(Debug, Clone, Copy)]
 pub struct StreamingProver<B: ProvingBackend> {
     backend: PhantomData<B>,
@@ -64,6 +64,7 @@ impl<B: ProvingBackend> StreamingProver<B> {
     ///
     /// # Errors
     /// Returns an error if validation fails or the backend cannot produce a proof.
+    #[must_use]
     pub fn prove(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<crate::ProofArtifact> {
         let sp = Self::default();
         sp.validate_blocks(blocks)?;
@@ -74,6 +75,7 @@ impl<B: ProvingBackend> StreamingProver<B> {
     ///
     /// # Errors
     /// Returns an error if validation fails or the proof is invalid for the given inputs.
+    #[must_use]
     pub fn verify(
         artifact: &crate::ProofArtifact,
         blocks: &[BlockSummary],
@@ -91,7 +93,11 @@ impl<B: ProvingBackend> StreamingProver<B> {
     /// - Validates each block with ARE on the fly.
     /// - Pushes blocks into a backend streaming state.
     ///
-    /// Requires the backend to implement `ProvingBackendStream`.
+    /// Requires the backend to implement [`ProvingBackendStream`].
+    ///
+    /// # Errors
+    /// Returns an error if validation fails or the backend cannot produce a proof.
+    #[must_use]
     pub fn prove_stream_iter<I>(
         iter: I,
         manifest_root: [u8; 32],
@@ -138,6 +144,54 @@ impl<B: ProvingBackend> StreamingProver<B> {
         <B as ProvingBackendStream>::finish_stream(state)
     }
 
+    /// Streaming verify: replay σ_k **without** materializing the vector,
+    /// then call the backend's verifier (which may itself be streaming).
+    ///
+    /// The fold backend verifies against the manifest only, so we pass `&[]`.
+    /// Backends that require blocks in their verifier can still use the batch API.
+    ///
+    /// # Errors
+    /// Returns an error if validation fails or the proof fails to verify.
+    #[must_use]
+    pub fn verify_stream_iter<I>(
+        artifact: &crate::ProofArtifact,
+        iter: I,
+        manifest_root: [u8; 32],
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = Result<BlockSummary>>,
+    {
+        let sp = Self::default();
+
+        // Validate per-block ARE + interfaces on the fly.
+        let mut prev: Option<FiniteState> = None;
+        for (idx, item) in iter.into_iter().enumerate() {
+            let block = item?;
+
+            let fs = sp.replay.replay_block(&block).map_err(|e| {
+                anyhow!(
+                    "ARE validation failed for block index {} (block_id={}): {e}",
+                    idx,
+                    block.block_id
+                )
+            })?;
+
+            if let Some(p) = &prev {
+                if !sp.replay.interface_ok(p, &fs) {
+                    return Err(anyhow!(
+                        "interface mismatch at boundary {}→{}: (ctrl_out,in_head_out) != (ctrl_in,in_head_in)",
+                        idx.saturating_sub(1),
+                        idx
+                    ));
+                }
+            }
+            prev = Some(fs);
+        }
+
+        // Delegate to backend verification using an empty slice (fold backend does not need blocks).
+        B::verify(artifact, &[], manifest_root)
+    }
+
     /* ------------------------------ helpers --------------------------------- */
 
     /// Local batch validation pass (used by the slice-based API).
@@ -172,5 +226,15 @@ impl<B: ProvingBackend> StreamingProver<B> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Compile-time checks: generic struct is Send/Sync (PhantomData is).
+    fn _assert_send_sync<B: ProvingBackend>() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<StreamingProver<B>>();
     }
 }

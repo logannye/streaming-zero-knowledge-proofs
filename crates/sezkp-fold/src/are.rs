@@ -1,29 +1,22 @@
-// crates/sezkp-fold/src/are.rs
-
-//! Algebraic Replay Engine (ARE) primitives.
+//! Algebraic Replay Engine (ARE) primitives used by folding gadgets.
 //!
-//! Defines a tiny finite-state projection `Pi` and a constant-degree
-//! combiner used at internal merge nodes. The unique interface is represented
-//! by [`InterfaceWitness`] and checked via a lightweight replay proof from
-//! [`are_replay`] (for now a domain-separated MAC; can be swapped for a
-//! micro-STARK without changing the call sites).
+//! Defines a tiny finite-state projection `Pi` and a constant-degree combiner
+//! used at internal merge nodes. The unique interface is represented by
+//! [`InterfaceWitness`] and checked via a lightweight replay proof from
+//! [`crate::are_replay`] (legacy MAC or a small STARK).
 //!
 //! ## π semantics (frozen for v1)
 //!
 //! - `ctrl_in`, `ctrl_out`: reserved for A/B alignment (0 in this revision).
 //! - `flags`: bit0 indicates that boundary digests are present in `acc`
 //!   (as of v1, leaves set `flags |= 1`).
-//! - `acc[0..4]`: four 64-bit little-endian limbs of a **combined boundary
-//!   digest** computed as `BLAKE3("pi/boundary/v1" || L_tail_digest ||
-//!   R_head_digest)`. This packs both sides’ per-block boundary digests into
-//!   the fixed-width capsule without changing the wire layout.
-//!
-//! The interface here is stable and intentionally small so production
-//! upgrades (e.g., micro-STARK) remain backwards-compatible.
+//! - `acc[0..4]`: four 64-bit little-endian limbs of a combined boundary
+//!   digest (see docs/ARE). Packing both sides keeps the capsule fixed-width.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(
+    missing_docs,
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
@@ -43,17 +36,18 @@ pub const Q: usize = 4;
 /// Constant-size projection carried up the fold tree (see module docs for semantics).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pi {
-    /// A/B alignment
+    /// A/B alignment.
     pub ctrl_in: u32,
-    /// B/A alignment
+    /// B/A alignment.
     pub ctrl_out: u32,
-    /// Flags
+    /// Flags (bit 0 ⇒ boundary digests present).
     pub flags: u32,
-    /// Accumulator
+    /// Small accumulator over boundary digests.
     pub acc: [F1; Q],
 }
 
 impl Default for Pi {
+    #[inline]
     fn default() -> Self {
         Self {
             ctrl_in: 0,
@@ -67,13 +61,14 @@ impl Default for Pi {
 /// Aux data for constant-degree combination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CombineAux {
-    /// Auxiliary data for the combiner.
+    /// Auxiliary gamma values added component-wise in the combiner.
     pub gamma: [F1; Q],
-    /// Flag mask for the combiner.
+    /// Flag mask XOR-ed in the combiner.
     pub flag_mask: u32,
 }
 
 impl Default for CombineAux {
+    #[inline]
     fn default() -> Self {
         Self {
             gamma: [F1::from_u64(0); Q],
@@ -83,6 +78,7 @@ impl Default for CombineAux {
 }
 
 /// Constant-degree combiner `π_out = G(π_L, π_R; aux)`.
+#[inline]
 #[must_use]
 pub fn combine(pi_l: &Pi, pi_r: &Pi, aux: &CombineAux) -> Pi {
     let mut acc = [F1::from_u64(0); Q];
@@ -98,19 +94,23 @@ pub fn combine(pi_l: &Pi, pi_r: &Pi, aux: &CombineAux) -> Pi {
 }
 
 /// Witness for the unique interface replay between two subtrees/blocks.
+///
+/// Caller must ensure it represents the *single* boundary between the two
+/// adjacent intervals being combined.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InterfaceWitness {
     /// Left-side control output.
     pub left_ctrl_out: u32,
     /// Right-side control input.
     pub right_ctrl_in: u32,
-    /// Boundary writes digest.
+    /// Digest (e.g., BLAKE3) over boundary writes in the small replay window.
     pub boundary_writes_digest: [u8; 32],
 }
 
 impl InterfaceWitness {
-    #[must_use]
     /// Create a trivial interface witness with the given control input/output.
+    #[inline]
+    #[must_use]
     pub fn trivial(ctrl: u32) -> Self {
         Self {
             left_ctrl_out: ctrl,
@@ -130,6 +130,10 @@ pub struct ReplayResult {
 }
 
 /// Prove the bounded interface and return `(result, merged_pi)`.
+///
+/// This is the producer-side path used during folding. The returned `Pi` is
+/// the combined parent state (using a default `CombineAux`).
+#[inline]
 #[must_use]
 pub fn replay_check_prove(pi_l: &Pi, pi_r: &Pi, iface: &InterfaceWitness) -> (ReplayResult, Pi) {
     let ctrl_ok = pi_l.ctrl_out == iface.left_ctrl_out && pi_r.ctrl_in == iface.right_ctrl_in;
@@ -140,6 +144,12 @@ pub fn replay_check_prove(pi_l: &Pi, pi_r: &Pi, iface: &InterfaceWitness) -> (Re
 }
 
 /// Verify an interface replay result against the parent/children `Pi` states.
+///
+/// Returns `true` only if:
+/// 1) the proof verifies against `iface`,
+/// 2) `res.ok` is true (producer observed a valid interface), and
+/// 3) the parent equals the deterministic combination of `(left,right)`.
+#[inline]
 #[must_use]
 pub fn replay_check_verify(
     parent: &Pi,
@@ -157,6 +167,7 @@ pub fn replay_check_verify(
 }
 
 /// Back-compat shim (kept until all gadgets use the split API).
+#[inline]
 #[must_use]
 pub fn replay_check(pi_l: &Pi, pi_r: &Pi, iface: &InterfaceWitness) -> (bool, Pi) {
     let (res, pi_out) = replay_check_prove(pi_l, pi_r, iface);
@@ -240,7 +251,7 @@ impl<'de> Deserialize<'de> for CombineAux {
     }
 }
 
-/* ---------------- Optional helpers: raw (de)serialization of F1 vecs ------- */
+/* --------- Optional helpers: raw (de)serialization of small F1 vectors ----- */
 
 /// Serialize a small vector of [`F1`] to a writer (little-endian u64 words).
 pub fn serialize_f1_vec<W: std::io::Write>(a: &[F1], mut s: W) -> Result<()> {

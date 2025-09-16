@@ -1,10 +1,12 @@
-//! Very small prime field + naive DFT bootstrap, now with Goldilocks helpers.
+//! Very small prime field + naive DFT bootstrap, plus Goldilocks helpers.
 //!
 //! - `Fp64<P>`: prime field modulo a 64-bit prime `P` (const generic).
 //! - `dft`/`idft`: naive **O(n²)** DFT using a provided primitive root `omega`.
 //! - Goldilocks helpers: 64-bit field `p = 2^64 - 2^32 + 1`, primitive 2^k roots.
-//! - `domain`, `ntt`, `twiddle`, `coset`: power-of-two subgroup domains,
-//!   in-place NTT/INTT for Goldilocks, twiddle helpers, and optional cosets.
+//! - Modules: `domain`, `ntt`, `twiddle`, `coset` for power-of-two NTTs and LDEs.
+//!
+//! This crate is intentionally small and straightforward—great for benchmarks,
+//! pedagogy, and scaffolded protocol experiments.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -14,7 +16,8 @@
     clippy::pedantic,
     clippy::nursery,
     clippy::unwrap_used,
-    clippy::expect_used
+    clippy::expect_used,
+    clippy::doc_markdown
 )]
 
 pub mod domain;
@@ -28,7 +31,8 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 /// 64-bit prime field element (const generic modulus).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Fp64<const P: u64>(pub u64);
+pub struct Fp64<const P: u64>(/// Canonical representative modulo `P`. Public for convenience.
+pub u64);
 
 impl<const P: u64> Fp64<P> {
     /// Zero.

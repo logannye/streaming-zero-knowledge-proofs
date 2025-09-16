@@ -1,5 +1,3 @@
-// crates/sezkp-core/src/io.rs
-
 //! Serialization helpers for `BlockSummary` vectors and `ProofArtifact`s.
 //!
 //! JSON and CBOR read/write utilities with extension-based auto-detection.
@@ -10,7 +8,7 @@
 //! - In-memory CBOR helpers: [`to_cbor`] / [`from_cbor`]
 //! - Tiny versioned payload wrapper: [`Versioned<T>`]
 //! - Streaming helper: [`stream_block_summaries_auto`] returning a boxed iterator
-//!   so callers can uniformly consume JSONL (true streaming) or JSON/CBOR
+//!   so callers can uniformly consume JSONL/NDJSON (true streaming) or JSON/CBOR
 //!   (load-then-iterate) without caring about concrete iterator types.
 
 use crate::{BlockSummary, ProofArtifact};
@@ -104,20 +102,21 @@ pub fn write_block_summaries_auto<P: AsRef<Path>>(path: P, v: &[BlockSummary]) -
 
 /// Return a boxed iterator over `BlockSummary`s for the given path.
 ///
-/// - **`.jsonl`**: true streaming via `io_jsonl::stream_block_summaries_jsonl`
+/// - **`.jsonl` / `.ndjson`**: true streaming via `io_jsonl::stream_block_summaries_jsonl`
 ///   (no materialization; sublinear memory).
 /// - **`.json` / `.cbor`**: load the vector, then iterate (compat fallback).
 ///
 /// This uses a trait object so the concrete iterator type can differ by branch.
+#[must_use]
 pub fn stream_block_summaries_auto<P: AsRef<Path>>(
     path: P,
 ) -> Result<Box<dyn Iterator<Item = Result<BlockSummary>> + Send>> {
-    // Own the path so the iterator type doesn't capture `P`
+    // Own the path so the iterator type doesn't capture `P`.
     let pb = path.as_ref().to_owned();
 
     match ext_lower(&pb).as_deref() {
-        Some("jsonl") => {
-            // True streaming path; iterator owns its resources
+        Some("jsonl") | Some("ndjson") => {
+            // True streaming path; iterator owns its resources.
             let it = crate::io_jsonl::stream_block_summaries_jsonl(pb)?;
             Ok(Box::new(it))
         }
@@ -130,11 +129,11 @@ pub fn stream_block_summaries_auto<P: AsRef<Path>>(
             Ok(Box::new(v.into_iter().map(Ok)))
         }
         Some(other) => Err(anyhow!(
-            "unsupported blocks extension: {} (supported: .json, .cbor, .jsonl)",
+            "unsupported blocks extension: {} (supported: .json, .cbor, .jsonl, .ndjson)",
             other
         )),
         None => Err(anyhow!(
-            "path has no extension (expected .json, .cbor, or .jsonl)"
+            "path has no extension (expected .json, .cbor, .jsonl, or .ndjson)"
         )),
     }
 }

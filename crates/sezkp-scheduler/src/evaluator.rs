@@ -1,9 +1,14 @@
-// crates/sezkp-scheduler/src/evaluator.rs
-
-//! Simple one-shot evaluator that drives a DFS schedule.
+//! One-shot evaluator that **drives** a DFS schedule end-to-end.
 //!
-//! Replays leaves to finite-state with an exact replayer, checks interfaces,
-//! and combines upward using a constant-size combiner.
+//! It does three things for each subtree in a balanced recursion over `[1, T]`:
+//! 1) **Replays** each leaf block into a `FiniteState`.
+//! 2) **Checks** the left/right **interface** before merging.
+//! 3) **Combines** child states with a constant-size combiner.
+//!
+//! This is a simple, single-machine “oracle” useful for testing and
+//! regression checks. Production systems usually replace the inner pieces (e.g.,
+//! replay or combine) with proving/verification gadgets—but the control flow
+//! stays the same.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -60,6 +65,11 @@ impl Evaluator {
     }
 
     /// Evaluate the root Σ([1,T]) from block summaries, returning an error on inconsistency.
+    ///
+    /// The evaluator memoizes intermediate Σ([i,j]) states in a hash map keyed
+    /// by `(i,j)` pairs from the DFS events, then looks up and merges during
+    /// `Event::Combine(left,right)`. Interfaces are validated via the
+    /// `ExactReplayer::interface_ok` policy.
     pub fn evaluate_root_checked(&self, blocks: &[BlockSummary]) -> Result<FiniteState> {
         let t_blocks = u32::try_from(blocks.len()).unwrap_or(u32::MAX);
         if t_blocks == 0 {

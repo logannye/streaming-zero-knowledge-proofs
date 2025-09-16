@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Core data types, bounded replay, and combiners for SEZKP"
 license = "MIT"
+# Optional but helpful metadata for discoverability/docs:
+keywords = ["zkp", "stark", "folding", "proofs", "streaming"]
+categories = ["cryptography", "data-structures", "algorithms"]
+# Pin the minimum supported Rust version if you track MSRV; keep in sync with rust-toolchain.toml.
+rust-version = "1.74"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -13,3 +18,19 @@ anyhow = "1"
 
 [dev-dependencies]
 proptest = "1"
+
+# Gentle, repo-wide lint defaults that complement the crate-level attributes.
+# (These apply to tests/examples/benches where you might not set #![deny(...)] explicitly.)
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+# Build docs the same way users will see them on docs.rs.
+[package.metadata.docs.rs]
+all-features = true
+no-default-features = false

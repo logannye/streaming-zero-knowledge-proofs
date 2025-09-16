@@ -1,11 +1,9 @@
-// crates/sezkp-core/src/artifact.rs
-
 //! Proof artifact types shared across backends and frontends (CLI/FFI/Python).
 //!
 //! These types define a stable, serialized boundary between proving backends
-//! and callers. `ProofArtifact` is intentionally minimal: it pins the backend
-//! identity, the committed `manifest_root`, backend-opaque `proof_bytes`,
-//! and a `meta` JSON value for lightweight diagnostics.
+//! and callers. [`ProofArtifact`] is intentionally minimal: it pins the backend
+//! identity, the committed `manifest_root`, backend-opaque `proof_bytes`, and a
+//! free-form `meta` JSON value for lightweight diagnostics.
 //!
 //! Serialization is via `serde`; we keep the representation conservative
 //! (e.g., raw bytes for CBOR friendliness).
@@ -13,9 +11,14 @@
 //! ## Backward/forward compatibility
 //! - Do **not** add `#[serde(deny_unknown_fields)]` so newer producers with
 //!   extra fields remain readable by older consumers.
-//! - Enum variants may evolve; unknown variants map to `BackendKind::Unknown`.
-//! - Prefer adding new optional fields with `#[serde(default)]` if evolution
-//!   is needed rather than changing existing field types.
+//! - Enum variants may evolve; unknown variants map to [`BackendKind::Unknown`].
+//! - Prefer adding new **optional** fields with `#[serde(default)]` rather than
+//!   changing existing field types.
+//!
+//! ## When to use `meta`
+//! `meta` is intended for human/ops diagnostics (timings, parameter echoes,
+//! cache stats). Avoid parsing it in critical paths—if a value matters at
+//! runtime, promote it into a stable, typed field.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,8 +26,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Marked `#[non_exhaustive]` to allow adding future variants without
 /// forcing downstream exhaustive matches at compile time. At *runtime*,
-/// unknown serialized variants decode as `Unknown` to preserve forward
-/// compatibility across crate versions.
+/// unknown serialized variants decode as [`BackendKind::Unknown`] to preserve
+/// forward compatibility across crate versions.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -44,13 +47,11 @@ pub enum BackendKind {
 /// opaque blob. The `meta` field is free-form JSON intended for diagnostics or
 /// light telemetry (e.g., timing, parameter choices). **Avoid** parsing `meta`
 /// in critical paths; instead, expose stable fields if you need them.
-///
+/// 
 /// **Invariants**
 /// - `manifest_root` must match the root used during proving.
 /// - `backend` must reflect the backend that produced `proof_bytes`; verifiers
 ///   must reject mismatches.
-///
-/// Artifacts are typically CBOR-serialized in this project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProofArtifact {
     /// Backend that produced the proof.
@@ -60,12 +61,14 @@ pub struct ProofArtifact {
     /// Opaque, backend-specific encoding of the proof.
     pub proof_bytes: Vec<u8>,
     /// Free-form metadata for debugging/observability.
+    ///
+    /// Not required; omitted values deserialize as `Null`.
     #[serde(default)]
     pub meta: serde_json::Value,
 }
 
 impl ProofArtifact {
-    /// Construct a new `ProofArtifact`.
+    /// Construct a new [`ProofArtifact`].
     #[inline]
     #[must_use]
     pub fn new(
@@ -131,7 +134,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn serde_roundtrip_cbor() {
+    fn serde_roundtrip_json() {
         let artifact = ProofArtifact::new(
             BackendKind::Stark,
             [0u8; 32],

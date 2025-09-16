@@ -1,5 +1,21 @@
+//! Streaming FRI vs in-core baseline (equivalence + full verify).
+//!
+//! What this test covers
+//! ---------------------
+//! 1) Build column roots via the **streaming** builder so the transcript is
+//!    bound exactly like the prover does.
+//! 2) Compute the DEEP-ified layer-0 codeword two ways:
+//!      a) **Streaming**: drive `deep_coset_lde_stream` into a
+//!         `StreamingLayerBuilder` to obtain the layer-0 Merkle root,
+//!         while also collecting the values as `F1` for subsequent folds.
+//!      b) **In-core**: materialize base-domain evaluations, interpolate,
+//!         evaluate on the coset, and apply DEEP division.
+//!    We assert both layer-0 roots match.
+//! 3) Derive FRI betas and check that the **first folded layer** has the same
+//!    Merkle root in both approaches.
+//! 4) Build a full proof with the streaming prover and verify it end-to-end.
+
 #![allow(clippy::unwrap_used)]
-#![allow(unused_imports)]
 #![allow(unused_mut)]
 
 use sezkp_core::{BlockSummary, MovementLog, StepProjection, TapeOp, Window};
@@ -14,7 +30,6 @@ use sezkp_stark::{
         merkle::{hash_field_leaves, MerkleTree},
         openings::OnDemandOpenings,
         params,
-        verify::verify_v1,
     },
     ProvingBackend, StarkV1,
 };
@@ -62,10 +77,10 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
     let mut odo = OnDemandOpenings::new(&blocks, params::COL_CHUNK_LOG2);
     let col_roots = odo.build_roots();
 
-    // Build columns for AIR only
+    // Build columns for AIR only.
     let tc = TraceColumns::build(&blocks).expect("trace cols");
 
-    // Transcript prelude (exactly like the prover)
+    // Transcript prelude (exactly like the prover).
     let mut tr = Blake3Transcript::new(params::DS_V1_DOMAIN);
     let manifest_root = [7u8; 32];
     tr.absorb("manifest_root", &manifest_root);
@@ -76,7 +91,7 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
         tr.absorb(params::DS_COL_ROOT, &r.root);
     }
 
-    // AIR alphas
+    // AIR alphas.
     let a = params::derive_alphas(&mut tr);
     let alphas = Alphas {
         bool_flag: a[0],
@@ -92,7 +107,7 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
         boundary_last: a[2],
     };
 
-    // Domain sizes and OOD z
+    // Domain sizes and OOD point z (nudged if it lies on the coset).
     let blow = params::BLOWUP;
     let base_log2 = tc.n.trailing_zeros() as usize;
     let blow_log2 = blow.trailing_zeros() as usize;
@@ -114,7 +129,7 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
         z = z + one;
     }
 
-    // ---- Streaming layer-0 root (A3/A4 path)
+    // ---- Streaming layer-0 root (A3/A4 path).
     let mut l0_builder = StreamingLayerBuilder::new(lde_n);
     let mut lde_stream_vals_as_f1 = Vec::<F1>::with_capacity(lde_n); // for folds
 
@@ -128,9 +143,10 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
         blow_log2,
         shift,
         z,
-        12,
+        12, // chunk 4K elements at a time
         |chunk_le| {
             l0_builder.absorb_leaves(chunk_le);
+            // Keep values as F1 for folding checks below.
             for le in chunk_le {
                 lde_stream_vals_as_f1.push(F1::from_u64(u64::from_le_bytes(*le)));
             }
@@ -138,7 +154,7 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
     );
     let root0_stream = l0_builder.finalize();
 
-    // ---- In-core baseline layer-0 root (interpolate + eval + DEEP)
+    // ---- In-core baseline layer-0 root (interpolate + eval + DEEP).
     use sezkp_ffts::{coset::evaluate_on_coset_pow2, ntt::interpolate_from_evals};
     let mut base_vals = Vec::with_capacity(tc.n);
     for i in 0..tc.n {
@@ -146,7 +162,7 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
     }
     let coeffs = interpolate_from_evals(&base_vals);
     let mut lde_vals = evaluate_on_coset_pow2(&coeffs, lde_k_log2, shift);
-    // DEEP divide
+    // DEEP divide.
     let w = sezkp_ffts::goldilocks_primitive_root_2exp(lde_k_log2 as u32);
     let mut w_pow = one;
     for i in 0..lde_n {
@@ -155,44 +171,60 @@ fn fri_roots_streaming_match_incore_baseline_and_verify() {
         w_pow *= w;
     }
     let root0_mem = {
-        let leaves = hash_field_leaves(&lde_vals.iter().map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+        let leaves = hash_field_leaves(
+            &lde_vals
+                .iter()
+                .map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        );
         let mt = MerkleTree::from_leaves(&leaves);
         mt.root()
     };
 
     assert_eq!(root0_stream, root0_mem, "layer-0 root mismatch");
 
-    // ---- Derive betas and fold several layers; compare roots (sanity)
+    // ---- Derive betas and fold one layer; compare layer-1 roots (sanity).
     let n_folds = lde_k_log2;
     let betas = params::derive_betas_for_fri(&mut tr, n_folds);
 
-    // Fold 1 (stream vector vs baseline vector): they should match
     if lde_n > 1 {
         let half = lde_n / 2;
         let beta = betas[0];
+
         let mut fold_stream_vec = vec![F1::from_u64(0); half];
         for i in 0..half {
             fold_stream_vec[i] =
                 lde_stream_vals_as_f1[i] + beta * lde_stream_vals_as_f1[i + half];
         }
+
         let mut fold_mem_vec = vec![F1::from_u64(0); half];
         for i in 0..half {
             fold_mem_vec[i] = lde_vals[i] + beta * lde_vals[i + half];
         }
 
-        // Compare layer-1 roots
+        // Compare layer-1 roots.
         let r_stream = {
-            let leaves = hash_field_leaves(&fold_stream_vec.iter().map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+            let leaves = hash_field_leaves(
+                &fold_stream_vec
+                    .iter()
+                    .map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            );
             MerkleTree::from_leaves(&leaves).root()
         };
         let r_mem = {
-            let leaves = hash_field_leaves(&fold_mem_vec.iter().map(|v| v.to_le_bytes()).collect::<Vec<_>>());
+            let leaves = hash_field_leaves(
+                &fold_mem_vec
+                    .iter()
+                    .map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            );
             MerkleTree::from_leaves(&leaves).root()
         };
         assert_eq!(r_stream, r_mem, "layer-1 root mismatch");
     }
 
-    // ---- Full proof via streaming entrypoint must verify
+    // ---- Full proof via streaming entrypoint must verify.
     let art = StarkV1::prove_streaming(&blocks, manifest_root).expect("prove v1");
     StarkV1::verify(&art, &blocks, manifest_root).expect("verify v1");
 }

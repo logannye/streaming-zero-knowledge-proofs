@@ -4,18 +4,31 @@ version = "0.1.0"
 edition = "2021"
 description = "Command-line interface for SEZKP"
 license = "MIT"
+# Align with your workspace toolchain if set; adjust if needed.
+rust-version = "1.74"
+readme = "../../README.md"
+keywords = ["zkp", "proofs", "stark", "folding", "cli"]
+categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
+
+# Explicit bin metadata (clear in large workspaces)
+[[bin]]
+name = "sezkp-cli"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ciborium = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
-sezkp-core = { path = "../sezkp-core" }
-sezkp-trace = { path = "../sezkp-trace" }
+# Workspace path deps (kept as-is)
+sezkp-core   = { path = "../sezkp-core" }
+sezkp-trace  = { path = "../sezkp-trace" }
 sezkp-merkle = { path = "../sezkp-merkle" }
-sezkp-stark = { path = "../sezkp-stark" }
-sezkp-fold  = { path = "../sezkp-fold" }
+sezkp-stark  = { path = "../sezkp-stark" }
+sezkp-fold   = { path = "../sezkp-fold" }
+
+[dev-dependencies]
+# (none for now)

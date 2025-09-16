@@ -1,5 +1,9 @@
 //! Round-trip tests: coeffs --NTT--> evals --INTT--> coeffs
 
+#![forbid(unsafe_code)]
+#![deny(rust_2018_idioms)]
+#![allow(clippy::cast_possible_truncation)]
+
 use sezkp_ffts::{
     ntt::{forward_ntt_in_place, inverse_ntt_in_place},
     Goldilocks as F,

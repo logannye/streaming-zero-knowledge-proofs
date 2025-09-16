@@ -1,8 +1,7 @@
-// crates/sezkp-trace/src/io.rs
-
-//! I/O helpers for the trace file (format-level).
+//! I/O helpers for the `TraceFile` envelope (format-level).
 //!
-//! Supports JSON/CBOR and extension-based auto-detection.
+//! Supports JSON/CBOR and extension-based auto-detection. These routines do not
+//! impose VM semantics; they only move the `TraceFile` struct across the wire.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -23,7 +22,9 @@ use std::path::Path;
 
 /* ---------------- JSON ---------------- */
 
-/// Read `TraceFile` from **JSON**.
+/// Read a `TraceFile` from **JSON**.
+///
+/// Errors include file open, decoding, or malformed structure.
 pub fn read_trace_json<P: AsRef<Path>>(path: P) -> Result<TraceFile> {
     let path_ref = path.as_ref();
     let f = File::open(path_ref).with_context(|| format!("open {}", display(path_ref)))?;
@@ -33,7 +34,7 @@ pub fn read_trace_json<P: AsRef<Path>>(path: P) -> Result<TraceFile> {
     Ok(v)
 }
 
-/// Write `TraceFile` to **JSON** (pretty).
+/// Write a `TraceFile` to **JSON** (pretty).
 pub fn write_trace_json<P: AsRef<Path>>(path: P, v: &TraceFile) -> Result<()> {
     let path_ref = path.as_ref();
     let f = File::create(path_ref).with_context(|| format!("create {}", display(path_ref)))?;
@@ -45,7 +46,9 @@ pub fn write_trace_json<P: AsRef<Path>>(path: P, v: &TraceFile) -> Result<()> {
 
 /* ---------------- CBOR ---------------- */
 
-/// Read `TraceFile` from **CBOR**.
+/// Read a `TraceFile` from **CBOR**.
+///
+/// Uses `ciborium` for streaming-friendly decoding.
 pub fn read_trace_cbor<P: AsRef<Path>>(path: P) -> Result<TraceFile> {
     let path_ref = path.as_ref();
     let f = File::open(path_ref).with_context(|| format!("open {}", display(path_ref)))?;
@@ -55,7 +58,7 @@ pub fn read_trace_cbor<P: AsRef<Path>>(path: P) -> Result<TraceFile> {
     Ok(v)
 }
 
-/// Write `TraceFile` to **CBOR**.
+/// Write a `TraceFile` to **CBOR**.
 pub fn write_trace_cbor<P: AsRef<Path>>(path: P, v: &TraceFile) -> Result<()> {
     let path_ref = path.as_ref();
     let f = File::create(path_ref).with_context(|| format!("create {}", display(path_ref)))?;
@@ -68,6 +71,8 @@ pub fn write_trace_cbor<P: AsRef<Path>>(path: P, v: &TraceFile) -> Result<()> {
 /* --------------- Auto-detect by extension --------------- */
 
 /// Auto-detect **read** by extension (`.json` / `.cbor`, case-insensitive).
+///
+/// Returns a helpful error if the extension is missing or unsupported.
 pub fn read_trace_auto<P: AsRef<Path>>(path: P) -> Result<TraceFile> {
     match ext_lower(path.as_ref()).as_deref() {
         Some("json") => read_trace_json(path),

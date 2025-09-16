@@ -7,17 +7,20 @@ description = "Node.js bindings for SEZKP (feature-gated; off by default)"
 publish = false
 
 [lib]
-# Default to rlib; build a Node addon when `node` feature is enabled.
+# Default to rlib so the workspace builds without a Node toolchain.
+# For a production addon, you will typically want: crate-type = ["cdylib", "rlib"]
+# (cdylib produces the .node binary compatible with Node-API)
 crate-type = ["rlib"]
 
 [features]
-# Enable to compile a N-API addon. This is off by default to avoid requiring Node toolchain.
+# Enable to compile an N-API addon. This is off by default to avoid requiring the Node toolchain.
 node = ["dep:napi", "dep:napi-derive"]
 
 [dependencies]
 anyhow = "1"
 sezkp-core = { path = "../sezkp-core" }
 
-# Optional deps; only compiled with `--features node`
+# Optional deps; only compiled with `--features node`.
+# napi4 is broadly compatible with current Node LTS.
 napi = { version = "2", default-features = false, features = ["napi4"], optional = true }
 napi-derive = { version = "2", optional = true }

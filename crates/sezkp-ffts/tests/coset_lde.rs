@@ -1,5 +1,9 @@
 //! Coset LDE tests.
 
+#![forbid(unsafe_code)]
+#![deny(rust_2018_idioms)]
+#![allow(clippy::needless_range_loop, clippy::cast_possible_truncation)]
+
 use sezkp_ffts::{coset::evaluate_on_coset_pow2, ntt::evaluate_on_pow2_domain, Goldilocks as F};
 
 #[inline]

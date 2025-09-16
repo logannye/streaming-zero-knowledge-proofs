@@ -1,17 +1,18 @@
-//! Streaming witness builder.
+//! Streaming witness builder (v0).
 //!
-//! We serialize each step into a compact, deterministic row encoding:
+//! We serialize each step into a compact, deterministic **row encoding**:
 //!
 //! ```text
 //! [ input_mv (1B), for each tape: mv+1 (1B), write_flag (1B) ]
 //! ```
 //!
-//! - `input_mv` ∈ {−1,0,+1} is stored as a single signed byte (debug-asserted).
-//! - For each tape, `mv` ∈ {−1,0,+1} is stored as `mv+1` ∈ {0,1,2} (1B).
-//! - `write_flag` is 1 if there was a write on that step/tape, else 0.
+//! Encoding details:
+//! - `input_mv` ∈ {−1,0,+1} stored as a single signed byte (debug-asserted).
+//! - For each tape, `mv` ∈ {−1,0,+1} is stored as `mv+1` ∈ {0,1,2}.
+//! - `write_flag` is `1` iff there was a write on that step/tape, else `0`.
 //!
-//! This is *not* a full columnar AIR layout yet; it’s a single stream that
-//! remains stable across chunking and is easy to hash incrementally.
+//! This is **not** a full columnar AIR layout; it’s a single stream that is
+//! easy to hash incrementally and remains stable across chunking boundaries.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -30,15 +31,18 @@ use sezkp_core::{BlockSummary, TapeOp};
 #[inline]
 #[must_use]
 pub fn row_size(tau: usize) -> usize {
-    // 1 byte input_mv + (2 bytes per tape)
+    // 1 byte input_mv + (2 bytes per tape).
     1 + 2 * tau
 }
 
 /// Append the encoded row for one step into `out`, given `tau` tapes.
+///
+/// # Panics
+/// Panics in debug builds if a movement is outside `{-1,0,+1}`.
 #[inline]
 pub fn encode_step_row(out: &mut Vec<u8>, input_mv: i8, tapes: &[TapeOp]) {
     debug_assert!((-1..=1).contains(&input_mv), "input_mv must be in {{-1,0,1}}");
-    out.push(input_mv as u8); // {-1,0,1} → {255,0,1} if violated; guarded by debug_assert
+    out.push(input_mv as u8); // If violated in release, it wraps; debug_assert catches during dev.
 
     for op in tapes {
         debug_assert!((-1..=1).contains(&op.mv), "mv must be in {{-1,0,1}}");
@@ -51,11 +55,19 @@ pub fn encode_step_row(out: &mut Vec<u8>, input_mv: i8, tapes: &[TapeOp]) {
 }
 
 /// Stream all step rows of all blocks into a byte sink via a closure.
-/// The closure is invoked per *chunk* to keep memory flat.
+///
+/// Rows are batched into fixed-size **chunks** (by row count) to keep memory
+/// usage flat on long traces. The `emit_chunk` closure receives the contiguous
+/// buffer for each chunk.
 ///
 /// # Panics
-/// Panics if `chunk_rows == 0` or if `tau` varies across blocks.
-pub fn stream_rows<F: FnMut(&[u8])>(blocks: &[BlockSummary], chunk_rows: usize, mut emit_chunk: F) {
+/// Panics if `chunk_rows == 0`. Also assumes `tau` is constant across blocks
+/// (debug-asserted).
+pub fn stream_rows<F: FnMut(&[u8])>(
+    blocks: &[BlockSummary],
+    chunk_rows: usize,
+    mut emit_chunk: F,
+) {
     if blocks.is_empty() {
         return;
     }
@@ -69,10 +81,16 @@ pub fn stream_rows<F: FnMut(&[u8])>(blocks: &[BlockSummary], chunk_rows: usize, 
     let mut rows_in_buf = 0usize;
 
     for b in blocks {
-        debug_assert_eq!(b.windows.len(), tau, "tau should be constant across blocks");
+        debug_assert_eq!(
+            b.windows.len(),
+            tau,
+            "tau should be constant across blocks"
+        );
+
         for step in &b.movement_log.steps {
             encode_step_row(&mut buf, step.input_mv, &step.tapes);
             rows_in_buf += 1;
+
             if rows_in_buf == chunk_rows {
                 emit_chunk(&buf);
                 buf.clear();
@@ -100,8 +118,12 @@ mod tests {
 
     #[test]
     fn stream_rows_chunks_and_remainder() {
-        // Two blocks, tau=1, total 5 steps, chunk_rows=2 → emits 2 chunks then remainder.
-        let mk_step = |mv: i8| StepProjection { input_mv: mv, tapes: vec![TapeOp { write: None, mv: 0 }] };
+        // Two blocks, tau=1, total 5 steps, chunk_rows=2 → emits 2 chunks + remainder.
+        let mk_step = |mv: i8| StepProjection {
+            input_mv: mv,
+            tapes: vec![TapeOp { write: None, mv: 0 }],
+        };
+
         let b1 = BlockSummary {
             version: 1,
             block_id: 1,
@@ -114,10 +136,13 @@ mod tests {
             windows: vec![Window { left: 0, right: 0 }],
             head_in_offsets: vec![0],
             head_out_offsets: vec![0],
-            movement_log: MovementLog { steps: vec![mk_step(-1), mk_step(0), mk_step(1)] },
+            movement_log: MovementLog {
+                steps: vec![mk_step(-1), mk_step(0), mk_step(1)],
+            },
             pre_tags: vec![[0; 16]; 1],
             post_tags: vec![[0; 16]; 1],
         };
+
         let b2 = BlockSummary {
             version: 1,
             block_id: 2,
@@ -130,7 +155,9 @@ mod tests {
             windows: vec![Window { left: 0, right: 0 }],
             head_in_offsets: vec![0],
             head_out_offsets: vec![0],
-            movement_log: MovementLog { steps: vec![mk_step(0), mk_step(1)] },
+            movement_log: MovementLog {
+                steps: vec![mk_step(0), mk_step(1)],
+            },
             pre_tags: vec![[0; 16]; 1],
             post_tags: vec![[0; 16]; 1],
         };

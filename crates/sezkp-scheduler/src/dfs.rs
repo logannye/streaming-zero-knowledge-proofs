@@ -1,6 +1,20 @@
-// crates/sezkp-scheduler/src/dfs.rs
-
-//! Pointerless DFS scheduler over a balanced recursion tree.
+//! Pointerless DFS scheduler over a balanced recursion tree (inclusive spans).
+//!
+//! This module emits a stream of DFS **events** over a canonical, balanced
+//! recursion of the inclusive range `[1, T]`. It’s useful when you want to
+//! *drive* external logic (e.g., finite-state replay + interface checks) with
+//! a deterministic traversal order but no heap-allocated tree.
+//!
+//! ### Key properties
+//! - No heap nodes: maintains an explicit stack of frames.
+//! - Emits `DescendLeaf(k)` in DFS order and `Combine(left, right)` in
+//!   post-order for the inclusive children `[i, m]` and `[m+1, j]`.
+//! - Finishes with a single `Done` event.
+//!
+//! ### Note on interval type
+//! This file uses `sezkp_core::Interval` which is an **inclusive** `[i, j]` type
+//! (separate from the half-open interval in this crate’s `lib.rs`). This split
+//! lets consumers reuse whichever interval convention they already rely on.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -31,13 +45,13 @@ pub enum Event {
 struct Frame {
     /// Interval held by this stack frame.
     iv: Interval,
-    /// 0 = not visited, 1 = left done, 2 = right done (emit combine)
+    /// 0 = not visited, 1 = left done, 2 = right done (then emit combine)
     state: u8,
     left: Option<Interval>,
     right: Option<Interval>,
 }
 
-/// Pointerless DFS scheduler over `[1, T]`.
+/// Pointerless DFS scheduler over inclusive interval `[1, T]`.
 #[derive(Clone, Debug)]
 pub struct DfsScheduler {
     stack: Vec<Frame>,

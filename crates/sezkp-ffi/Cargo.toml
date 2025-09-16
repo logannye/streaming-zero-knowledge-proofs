@@ -5,16 +5,33 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "C ABI (FFI) for SEZKP (stub by default; enable 'cabi' feature to export C symbols)"
 publish = false
+rust-version = "1.74"
 
 [lib]
-# rlib only by default; you can add "cdylib" when enabling the C ABI later
+# rlib only by default; add "cdylib" when you’re ready to ship a C ABI library.
+# Example:
+# crate-type = ["rlib", "cdylib"]
 crate-type = ["rlib"]
 
 [features]
 # When you’re ready to export a dynamic C ABI, enable this feature and (optionally)
-# switch crate-type to include "cdylib".
+# update crate-type above to include "cdylib".
 cabi = []
 
 [dependencies]
-anyhow = "1"
-sezkp-core = { path = "../sezkp-core" }
+# Keep deps lean; add more as you expose additional FFI.
+# (Left here if you intend to call into core types via FFI later.)
+sezkp-core = { path = "../sezkp-core", optional = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+no-default-features = false

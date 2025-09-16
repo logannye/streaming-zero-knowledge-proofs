@@ -36,10 +36,7 @@ fn mk_blocks_bad_endpoint(t: usize) -> Vec<BlockSummary> {
         ctrl_out: 0,
         in_head_in: 0,
         in_head_out: 0,
-        windows: vec![Window {
-            left: 0,
-            right: (t as i64).max(1) - 1,
-        }],
+        windows: vec![Window { left: 0, right: (t as i64).max(1) - 1 }],
         head_in_offsets: vec![0],
         head_out_offsets: vec![head_last as u32],
         movement_log: MovementLog { steps },

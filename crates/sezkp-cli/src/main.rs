@@ -1,5 +1,31 @@
-// crates/sezkp-cli/src/main.rs
-
+//! sezkp-cli — reference command-line interface for SEZKP
+//!
+//! This binary drives the end-to-end “streaming, sublinear-space ZKP” workflow:
+//! 1) simulate a synthetic trace and partition into σ_k blocks,
+//! 2) commit blocks to a Merkle root (manifest),
+//! 3) produce a proof (folding or STARK backends; streaming or in-memory),
+//! 4) verify a proof (prefer streaming to keep memory sublinear),
+//! 5) convert block files to JSONL for streaming use.
+//!
+//! ### Examples
+//! ```text
+//! # 1) Simulate and write CBOR blocks
+//! sezkp-cli simulate --t 32768 --b 512 --tau 8 --out-blocks blocks.cbor
+//!
+//! # 2) Commit blocks -> manifest
+//! sezkp-cli commit --blocks blocks.cbor --out manifest.cbor
+//!
+//! # 3) Prove with folding backend (streaming input)
+//! sezkp-cli prove --backend fold --blocks blocks.jsonl --manifest manifest.cbor \
+//!   --out proof.cbor --fold-mode minram --fold-cache 64 --wrap-cadence 0 --stream
+//!
+//! # 4) Verify (streaming path preferred for sublinear memory)
+//! sezkp-cli verify --backend fold --blocks blocks.jsonl --manifest manifest.cbor \
+//!   --proof proof.cbor
+//!
+//! # 5) Convert blocks to JSONL (NDJSON) for streaming
+//! sezkp-cli export-jsonl --input blocks.cbor --output blocks.jsonl
+//! ```
 #![forbid(unsafe_code)]
 #![deny(
     rust_2018_idioms,
@@ -11,19 +37,20 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use sezkp_core::ProvingBackend;
 use sezkp_core::{
     io::{
         read_block_summaries_auto, read_proof_auto, stream_block_summaries_auto, write_proof_auto,
     },
-    BlockSummary,
     ProofArtifact,
 };
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, info_span};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Top-level CLI.
 #[derive(Parser, Debug)]
 #[command(
     name = "sezkp-cli",
@@ -37,75 +64,77 @@ struct Cli {
     cmd: Cmd,
 }
 
+/// CLI subcommands.
 #[derive(Subcommand, Debug)]
 enum Cmd {
     /// Simulate a synthetic trace and partition it into σ_k blocks.
-    /// If --out-blocks ends with `.jsonl`, writes NDJSON for streaming.
+    ///
+    /// If --out-blocks ends with `.jsonl` or `.ndjson`, writes NDJSON for streaming.
     Simulate {
-        /// Trace length T (>0)
+        /// Trace length T (> 0).
         #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u32).range(1..))]
         t: u32,
 
-        /// Number of blocks b (>0)
+        /// Number of blocks b (1..=T).
         #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(1..))]
         b: u32,
 
-        /// Parameter τ (>0), e.g., branching/arity in the synthetic generator
+        /// Parameter τ (> 0), e.g., branching/arity in the synthetic generator.
         #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..))]
         tau: u8,
 
-        /// Output path for σ_k block summaries (CBOR/JSON/JSONL)
+        /// Output path for σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
         #[arg(long, default_value = "blocks.cbor")]
         out_blocks: PathBuf,
     },
 
-    /// Commit blocks to a Merkle root and write a manifest
+    /// Commit blocks to a Merkle root and write a manifest.
     Commit {
-        /// Input path to σ_k block summaries (CBOR/JSON/JSONL)
+        /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
         #[arg(long)]
         blocks: PathBuf,
 
-        /// Output path for the manifest (CBOR/JSON)
+        /// Output path for the manifest (CBOR/JSON).
         #[arg(long, default_value = "manifest.cbor")]
         out: PathBuf,
     },
 
-    /// Check that a blocks file matches a manifest
+    /// Check that a blocks file matches a manifest.
     VerifyCommit {
-        /// Input path to σ_k block summaries (CBOR/JSON/JSONL)
+        /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
         #[arg(long)]
         blocks: PathBuf,
 
-        /// Input path to manifest (CBOR/JSON)
+        /// Input path to manifest (CBOR/JSON).
         #[arg(long)]
         manifest: PathBuf,
     },
 
-    /// Convert blocks (CBOR/JSON/JSONL) -> JSON Lines (NDJSON) for streaming proofs
+    /// Convert blocks (CBOR/JSON/JSONL/NDJSON) → JSON Lines (NDJSON) for streaming proofs.
     ExportJsonl {
-        /// Input blocks path (CBOR/JSON/JSONL)
+        /// Input blocks path (CBOR/JSON/JSONL/NDJSON).
         #[arg(long)]
         input: PathBuf,
-        /// Output JSONL path
+        /// Output JSONL path.
         #[arg(long)]
         output: PathBuf,
     },
 
-    /// Produce a ZK (mock) proof with the chosen backend
+    /// Produce a ZK proof with the chosen backend.
     Prove {
-        /// Proof backend
+        /// Proof backend.
         #[arg(value_enum, long)]
         backend: BackendOpt,
 
-        /// Input path to σ_k block summaries (CBOR/JSON/JSONL)
+        /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
         #[arg(long)]
         blocks: PathBuf,
 
-        /// Input path to manifest (CBOR/JSON)
+        /// Input path to manifest (CBOR/JSON).
         #[arg(long)]
         manifest: PathBuf,
 
-        /// Output path for proof artifact (CBOR/JSON)
+        /// Output path for proof artifact (CBOR/JSON).
         #[arg(long, default_value = "proof.cbor")]
         out: PathBuf,
 
@@ -123,42 +152,59 @@ enum Cmd {
         wrap_cadence: u32,
 
         /// Stream blocks instead of loading all into memory.
-        /// Effective with `.jsonl` inputs; `.json`/`.cbor` may degrade to in-memory iteration.
+        ///
+        /// Effective with `.jsonl`/`.ndjson` inputs; `.json`/`.cbor` may degrade to in-memory iteration.
         #[arg(long, default_value_t = false)]
         stream: bool,
+
+        /// Assume the blocks file has already been verified against the manifest.
+        ///
+        /// Skips the extra pre-check inside `prove` to avoid redundant I/O/RSS.
+        #[arg(long, default_value_t = false)]
+        assume_committed: bool,
     },
 
-    /// Verify a proof produced by the chosen backend
+    /// Verify a proof produced by the chosen backend.
     Verify {
-        /// Proof backend
+        /// Proof backend.
         #[arg(value_enum, long)]
         backend: BackendOpt,
 
-        /// Input path to σ_k block summaries (CBOR/JSON/JSONL)
+        /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
         #[arg(long)]
         blocks: PathBuf,
 
-        /// Input path to manifest (CBOR/JSON)
+        /// Input path to manifest (CBOR/JSON).
         #[arg(long)]
         manifest: PathBuf,
 
-        /// Input path to proof artifact (CBOR/JSON)
+        /// Input path to proof artifact (CBOR/JSON).
         #[arg(long)]
         proof: PathBuf,
+
+        /// Assume the blocks file has already been verified against the manifest.
+        ///
+        /// Skips the extra pre-check inside `verify` to avoid redundant I/O/RSS.
+        #[arg(long, default_value_t = false)]
+        assume_committed: bool,
     },
 }
 
+/// Available proving/verification backends.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
 enum BackendOpt {
-    /// Folding-based aggregation backend
+    /// Folding-based aggregation backend.
     Fold,
-    /// STARK IOP backend
+    /// STARK v1 backend (PIOP/FRI; streaming-friendly).
     Stark,
 }
 
+/// Folding driver modes.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, ValueEnum)]
 enum FoldModeOpt {
+    /// Balanced space/time (keeps O(T) endpoints).
     Balanced,
+    /// Min-RAM mode (recompute endpoints; sublinear space).
     Minram,
 }
 
@@ -189,6 +235,7 @@ fn main() -> Result<()> {
             fold_cache,
             wrap_cadence,
             stream,
+            assume_committed,
         } => prove(
             backend,
             blocks,
@@ -198,6 +245,7 @@ fn main() -> Result<()> {
             fold_cache,
             wrap_cadence,
             stream,
+            assume_committed,
         ),
 
         Cmd::Verify {
@@ -205,11 +253,15 @@ fn main() -> Result<()> {
             blocks,
             manifest,
             proof,
-        } => verify(backend, blocks, manifest, proof),
+            assume_committed,
+        } => verify(backend, blocks, manifest, proof, assume_committed),
     }
 }
 
 /// Initialize tracing with an env-driven filter (default INFO).
+///
+/// Set `RUST_LOG=debug` (or `trace`) to increase verbosity, e.g.:
+/// `RUST_LOG=sezkp_cli=debug,sezkp_core=info sezkp-cli prove ...`
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
 
@@ -223,6 +275,9 @@ fn init_tracing() {
 }
 
 /// Ensure the parent directory for a file exists.
+///
+/// # Errors
+/// Returns an error if the directory cannot be created.
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
@@ -233,38 +288,42 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Return `true` if the path’s extension suggests JSON Lines (`.jsonl` or `.ndjson`).
+fn is_jsonl_like(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .is_some_and(|ext| ext == "jsonl" || ext == "ndjson")
+}
+
 fn simulate(t: u32, b: u32, tau: u8, out_blocks: PathBuf) -> Result<()> {
+    let _span = info_span!("simulate", t, b, tau, out = %out_blocks.display()).entered();
     use sezkp_trace::{generator::generate_trace, partition::partition_trace};
 
     if b > t {
         bail!("number of blocks b ({b}) cannot exceed trace length T ({t})");
     }
 
-    info!(t, b, tau, "generating synthetic trace");
+    info!("generating synthetic trace");
     let trace = generate_trace(t as u64, tau);
     let blocks = partition_trace(&trace, b);
 
     ensure_parent_dir(&out_blocks)?;
 
-    // If the extension is .jsonl, write NDJSON for streaming.
-    let ext = out_blocks
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase());
-
-    if ext.as_deref() == Some("jsonl") {
+    // If the extension is .jsonl/.ndjson, write NDJSON for streaming.
+    if is_jsonl_like(&out_blocks) {
         let f = File::create(&out_blocks)
             .with_context(|| format!("create {}", out_blocks.display()))?;
         let mut w = BufWriter::new(f);
-        for b in &blocks {
-            let line = serde_json::to_string(b).context("serialize block to JSON line")?;
-            w.write_all(line.as_bytes())?;
+        for blk in &blocks {
+            serde_json::to_writer(&mut w, blk).context("serialize block as JSON line")?;
             w.write_all(b"\n")?;
         }
         w.flush()?;
     } else {
-        sezkp_core::io::write_block_summaries_auto(&out_blocks, &blocks)
-            .with_context(|| format!("writing σ_k blocks to {}", out_blocks.display()))?;
+        sezkp_core::io::write_block_summaries_auto(&out_blocks, &blocks).with_context(|| {
+            format!("writing σ_k blocks (auto format) to {}", out_blocks.display())
+        })?;
     }
 
     println!(
@@ -279,9 +338,10 @@ fn simulate(t: u32, b: u32, tau: u8, out_blocks: PathBuf) -> Result<()> {
 }
 
 fn commit_blocks(blocks: PathBuf, out: PathBuf) -> Result<()> {
+    let _span = info_span!("commit", blocks = %blocks.display(), out = %out.display()).entered();
     use sezkp_merkle::commit_block_file;
 
-    info!(blocks=%blocks.display(), out=%out.display(), "committing blocks");
+    info!("committing blocks");
     ensure_parent_dir(&out)?;
 
     commit_block_file(&blocks, &out).with_context(|| {
@@ -297,9 +357,12 @@ fn commit_blocks(blocks: PathBuf, out: PathBuf) -> Result<()> {
 }
 
 fn verify_commit(blocks: PathBuf, manifest: PathBuf) -> Result<()> {
+    let _span =
+        info_span!("verify_commit", blocks = %blocks.display(), manifest = %manifest.display())
+            .entered();
     use sezkp_merkle::verify_block_file_against_manifest;
 
-    info!(blocks=%blocks.display(), manifest=%manifest.display(), "verifying commit");
+    info!("verifying commit");
     verify_block_file_against_manifest(&blocks, &manifest).with_context(|| {
         format!(
             "verifying that {} matches manifest {}",
@@ -316,9 +379,15 @@ fn verify_commit(blocks: PathBuf, manifest: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Convert any blocks file (CBOR/JSON/JSONL) into JSON Lines for streaming proofs.
+/// Convert any blocks file (CBOR/JSON/JSONL/NDJSON) into JSON Lines for streaming proofs.
+///
+/// # Errors
+/// Propagates I/O and serialization errors.
 fn export_jsonl(input: PathBuf, output: PathBuf) -> Result<()> {
-    info!(infile=%input.display(), outfile=%output.display(), "export to jsonl");
+    let _span =
+        info_span!("export_jsonl", infile = %input.display(), outfile = %output.display())
+            .entered();
+    info!("opening input stream");
     let iter = stream_block_summaries_auto(&input).context("open input stream")?;
 
     ensure_parent_dir(&output)?;
@@ -327,9 +396,8 @@ fn export_jsonl(input: PathBuf, output: PathBuf) -> Result<()> {
 
     let mut n = 0usize;
     for item in iter {
-        let b = item?;
-        let line = serde_json::to_string(&b).context("serialize block to JSON line")?;
-        w.write_all(line.as_bytes())?;
+        let blk = item?;
+        serde_json::to_writer(&mut w, &blk).context("serialize block as JSON line")?;
         w.write_all(b"\n")?;
         n += 1;
     }
@@ -339,6 +407,7 @@ fn export_jsonl(input: PathBuf, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prove(
     backend: BackendOpt,
     blocks: PathBuf,
@@ -348,12 +417,26 @@ fn prove(
     fold_cache: usize,
     wrap_cadence: u32,
     stream: bool,
+    assume_committed: bool,
 ) -> Result<()> {
+    let _span = info_span!(
+        "prove",
+        ?backend,
+        blocks = %blocks.display(),
+        manifest = %manifest.display(),
+        out = %out.display(),
+        stream
+    )
+    .entered();
+
     use sezkp_core::prover::StreamingProver;
     use sezkp_merkle::{read_manifest_auto, verify_block_file_against_manifest};
 
-    info!(?backend, blocks=%blocks.display(), manifest=%manifest.display(), out=%out.display(), stream, "proving");
-    verify_block_file_against_manifest(&blocks, &manifest).context("blocks/manifest mismatch")?;
+    // Skip redundant blocks/manifest pre-check if caller already verified it.
+    if !assume_committed {
+        verify_block_file_against_manifest(&blocks, &manifest)
+            .context("blocks/manifest mismatch")?;
+    }
 
     let man = read_manifest_auto(&manifest).context("reading manifest")?;
 
@@ -370,26 +453,45 @@ fn prove(
         std::env::set_var("SEZKP_WRAP_CADENCE", wrap_cadence.to_string());
     }
 
-    // Choose streaming path iff requested (true streaming with .jsonl; other formats will
-    // still iterate but may allocate the full Vec internally depending on the reader).
+    // Choose streaming path iff requested.
     let artifact: ProofArtifact = match (backend, stream) {
         (BackendOpt::Fold, true) => {
             use sezkp_fold::FoldAgg;
-            let iter = stream_block_summaries_auto(&blocks).context("open stream")?;
-            StreamingProver::<FoldAgg>::prove_stream_iter(iter, man.root)
-                .context("fold backend streaming proof failed")?
+
+            // Decide on a proof stream path adjacent to the artifact.
+            let mut stream_path = out.clone();
+            stream_path.set_extension("cborseq");
+            // Tell the backend where to write the streaming proof.
+            std::env::set_var("SEZKP_PROOF_STREAM_PATH", &stream_path);
+
+            let iter = stream_block_summaries_auto(&blocks).context("open blocks stream")?;
+            let art = StreamingProver::<FoldAgg>::prove_stream_iter(iter, man.root)
+                .context("fold backend streaming proof failed")?;
+
+            println!(
+                "Proved (streaming/fold) → artifact={} stream={}",
+                out.display(),
+                stream_path.display()
+            );
+            art
         }
         (BackendOpt::Fold, false) => {
             use sezkp_fold::FoldAgg;
-            let blocks_v = read_block_summaries_auto(&blocks).context("reading blocks")?;
-            StreamingProver::<FoldAgg>::prove(&blocks_v, man.root)
+            let blocks_vec = read_block_summaries_auto(&blocks).context("reading blocks")?;
+            StreamingProver::<FoldAgg>::prove(&blocks_vec, man.root)
                 .context("fold backend proof failed")?
         }
-        (BackendOpt::Stark, _) => {
-            use sezkp_stark::StarkIOP;
-            let blocks_v = read_block_summaries_auto(&blocks).context("reading blocks")?;
-            StreamingProver::<StarkIOP>::prove(&blocks_v, man.root)
-                .context("stark backend proof failed")?
+        // --- STARK v1 path (always ZK). Prefer streaming entrypoint when asked.
+        (BackendOpt::Stark, true) => {
+            use sezkp_stark::StarkV1;
+            let blocks_vec = read_block_summaries_auto(&blocks).context("reading blocks")?;
+            StarkV1::prove_streaming(&blocks_vec, man.root)
+                .context("stark-v1 streaming proof failed")?
+        }
+        (BackendOpt::Stark, false) => {
+            use sezkp_stark::StarkV1;
+            let blocks_vec = read_block_summaries_auto(&blocks).context("reading blocks")?;
+            StarkV1::prove(&blocks_vec, man.root).context("stark-v1 proof failed")?
         }
     };
 
@@ -406,29 +508,50 @@ fn prove(
     Ok(())
 }
 
-fn verify(backend: BackendOpt, blocks: PathBuf, manifest: PathBuf, proof: PathBuf) -> Result<()> {
+fn verify(
+    backend: BackendOpt,
+    blocks: PathBuf,
+    manifest: PathBuf,
+    proof: PathBuf,
+    assume_committed: bool,
+) -> Result<()> {
+    let _span = info_span!(
+        "verify",
+        ?backend,
+        blocks = %blocks.display(),
+        manifest = %manifest.display(),
+        proof = %proof.display()
+    )
+    .entered();
+
     use sezkp_core::prover::StreamingProver;
     use sezkp_merkle::{read_manifest_auto, verify_block_file_against_manifest};
 
-    info!(?backend, blocks=%blocks.display(), manifest=%manifest.display(), proof=%proof.display(), "verifying proof");
-    verify_block_file_against_manifest(&blocks, &manifest).context("blocks/manifest mismatch")?;
+    // Skip redundant blocks/manifest pre-check if caller already verified it.
+    if !assume_committed {
+        verify_block_file_against_manifest(&blocks, &manifest)
+            .context("blocks/manifest mismatch")?;
+    }
 
     let man = read_manifest_auto(&manifest).context("reading manifest")?;
-    // NEW: verify accepts `.jsonl` by streaming then collecting to Vec for the backend API.
-    let blocks_v = read_blocks_for_verify(&blocks).context("reading/streaming blocks for verify")?;
     let artifact = read_proof_auto(&proof)
         .with_context(|| format!("reading proof artifact from {}", proof.display()))?;
 
     match backend {
         BackendOpt::Fold => {
             use sezkp_fold::FoldAgg;
-            StreamingProver::<FoldAgg>::verify(&artifact, &blocks_v, man.root)
+
+            // Prefer streaming verify to keep memory sublinear.
+            let iter = stream_block_summaries_auto(&blocks).context("open blocks stream")?;
+            StreamingProver::<FoldAgg>::verify_stream_iter(&artifact, iter, man.root)
                 .context("fold backend verification failed")?;
         }
         BackendOpt::Stark => {
-            use sezkp_stark::StarkIOP;
-            StreamingProver::<StarkIOP>::verify(&artifact, &blocks_v, man.root)
-                .context("stark backend verification failed")?;
+            // v1 STARK verifier (manifest-root checked inside).
+            use sezkp_stark::StarkV1;
+            let blocks_vec = read_block_summaries_auto(&blocks).context("reading blocks")?;
+            StarkV1::verify(&artifact, &blocks_vec, man.root)
+                .context("stark-v1 verification failed")?;
         }
     }
 
@@ -436,21 +559,20 @@ fn verify(backend: BackendOpt, blocks: PathBuf, manifest: PathBuf, proof: PathBu
     Ok(())
 }
 
-/// Helper: read blocks for verification, accepting `.jsonl` by streaming.
-fn read_blocks_for_verify(path: &Path) -> Result<Vec<BlockSummary>> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase());
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    if ext.as_deref() == Some("jsonl") {
-        let mut out = Vec::new();
-        let iter = stream_block_summaries_auto(path).context("open jsonl stream")?;
-        for item in iter {
-            out.push(item?);
-        }
-        Ok(out)
-    } else {
-        read_block_summaries_auto(path)
+    #[test]
+    fn parse_commit_smoke() {
+        // Ensure subcommand/args parse; do not run anything.
+        let _ = Cli::parse_from([
+            "sezkp-cli",
+            "commit",
+            "--blocks",
+            "blocks.cbor",
+            "--out",
+            "manifest.cbor",
+        ]);
     }
 }

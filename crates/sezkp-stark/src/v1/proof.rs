@@ -12,18 +12,24 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Per-column outer Merkle root bound into the transcript.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ColumnRoot {
     pub label: String,
     pub root: [u8; 32],
 }
 
+/// Wrapper for FRI layer roots (layer-0..last).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FriRoots {
     pub roots: Vec<[u8; 32]>,
 }
 
 /// Opening of one column value (little-endian) with a **chunked** Merkle path.
+///
+/// The proof is split in two parts:
+///  - path inside the chunk (leaf → chunk_root)
+///  - path from chunk_root to the global outer root (chunk_root → outer_root)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Opening {
     pub value_le: [u8; 8],
@@ -37,6 +43,7 @@ pub struct Opening {
     pub path_to_chunk: Vec<[u8; 32]>,
 }
 
+/// Per-tape set of openings for a single queried row.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PerTapeOpen {
     pub mv: Opening,
@@ -51,6 +58,7 @@ pub struct PerTapeOpen {
     pub out_off: Opening,
 }
 
+/// Row-level set of openings (tape-wise + scalar flags).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RowOpenings {
     pub row: usize,
@@ -67,12 +75,14 @@ pub struct FriQuery {
     pub pairs: Vec<([u8; 8], Vec<[u8; 32]>, [u8; 8], Vec<[u8; 32]>)>, // (v_i, path_i, v_j, path_j)
 }
 
+/// Complete proof object for v1 (columnar PIOP + FRI).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProofV1 {
     /// LDE domain size used by FRI (may be > number of trace rows).
     pub domain_n: usize,
     pub tau: usize,
 
+    /// Column commitments (outer roots) in transcript order.
     pub col_roots: Vec<ColumnRoot>,
 
     /// Column openings at sampled rows (AIR).
@@ -83,5 +93,6 @@ pub struct ProofV1 {
     pub fri_queries: Vec<FriQuery>,
     pub fri_final_value_le: [u8; 8],
 
+    /// Merkle root of the block-summaries manifest (bound at the top).
     pub manifest_root: [u8; 32],
 }

@@ -1,10 +1,15 @@
-// crates/sezkp-stark/src/iop.rs
-
 //! Minimal IOP-style commitment over block interfaces (mock).
 //!
 //! This *mock* STARK IOP layer derives deterministic proof bytes from a
 //! transcript over per-block interface data (sizes and head drifts).
-//! It’s deliberately tiny so we can exercise the end-to-end plumbing.
+//! It’s deliberately tiny so we can exercise the end-to-end plumbing and
+//! serialization without depending on a full polynomial IOP stack.
+//!
+//! Implementation notes:
+//! - We absorb a compact public tuple per block into a domain-separated
+//!   transcript (Fiat–Shamir).
+//! - The “proof” is simply three 32-byte challenges concatenated.
+//! - Deterministic for identical inputs + domain strings.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -30,6 +35,9 @@ fn zigzag_i64_to_u64(x: i64) -> u64 {
 }
 
 /// Absorb interface data for a single block into the transcript.
+///
+/// We bind: IDs, step range, ctrl boundary, step count, input head drift,
+/// and per-tape head drifts measured inside the declared windows.
 fn absorb_block_iface(tr: &mut Blake3Transcript, b: &BlockSummary) {
     tr.absorb_u64("block_id", b.block_id as u64);
     tr.absorb_u64("step_lo", b.step_lo);
@@ -64,7 +72,8 @@ fn absorb_block_iface(tr: &mut Blake3Transcript, b: &BlockSummary) {
 
 /// Produce deterministic “proof bytes” by applying Fiat–Shamir to the absorbed interface.
 ///
-/// This is a mock; it just squeezes three 32-byte challenges.
+/// This is a mock; it just squeezes three 32-byte challenges. Consumers can wrap
+/// these bytes in higher-level envelopes as needed.
 #[must_use]
 pub fn commit_block_fiat_shamir(tr: &mut Blake3Transcript, blocks: &[BlockSummary]) -> Vec<u8> {
     tr.absorb_u64("n_blocks", blocks.len() as u64);

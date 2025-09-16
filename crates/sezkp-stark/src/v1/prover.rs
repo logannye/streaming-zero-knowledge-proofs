@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(
+    missing_docs,
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
@@ -58,10 +59,11 @@ fn next_wrap(idx: usize, len: usize) -> usize {
 
 /// Produce a v1 proof (streaming layer-0 root + on-demand column openings + ZK masks).
 pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<ProofV1> {
-    // Columnar view for AIR composition only (we don't commit these columns in-core).
+    // 1) Columnar view for AIR composition only.
+    // We do NOT commit this view directly; column commitments are streamed.
     let tc = TraceColumns::build(blocks)?;
 
-    // Transcript prelude
+    // Transcript prelude.
     let mut tr = Blake3Transcript::new(params::DS_V1_DOMAIN);
     tr.absorb("manifest_root", &manifest_root);
     tr.absorb_u64("n", tc.n as u64);
@@ -69,6 +71,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
 
     /* ------------------- Column commitments (streamed roots) ---------------- */
 
+    // Streamed, chunked column commitments; returns outer roots per label.
     let mut odo = OnDemandOpenings::new(blocks, params::COL_CHUNK_LOG2);
     let col_roots = odo.build_roots();
 
@@ -89,18 +92,19 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         slack_bits_bool: a[5],
         slack_reconstruct: a[6],
         sym_bits_bool: a[7],
-        sym_reconstruct: a[0], // reuse
-        boundary_first: a[2],  // reuse
-        boundary_last: a[2],   // reuse
+        sym_reconstruct: a[0], // reuse some randomness for placeholders
+        boundary_first: a[2],
+        boundary_last: a[2],
     };
 
     /* -------------------- Draw ZK mask polynomials (A5) --------------------- */
 
+    // Mask polynomials depend only on transcript state (not the witness).
     let mask_coeffs = derive_mask_coeffs(&mut tr, DEFAULT_MASK_DEG, DEFAULT_N_MASKS);
 
     /* ------------------- Streaming LDE + DEEP (layer-0) --------------------- */
 
-    // Domain sizes
+    // Domain sizes.
     let blow = params::BLOWUP;
     debug_assert!(blow.is_power_of_two(), "BLOWUP must be a power of two");
     let base_log2 = tc.n.trailing_zeros() as usize;
@@ -108,15 +112,16 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
     let lde_k_log2 = base_log2 + blow_log2;
     let lde_n = 1usize << lde_k_log2;
 
-    // Base-domain primitive root for x = ω^i (for mask evaluation).
+    // Base-domain primitive root for x = ω^i (for mask evaluation at ω^i).
     let w_base = goldilocks_primitive_root_2exp(base_log2 as u32);
 
-    // Coset shift (demo) and OOD point (ensure it's off the evaluation coset).
+    // Coset shift and OOD point (ensure z ∉ {shift · ω^i}).
     let shift = F1::from_u64(3);
     let mut z = params::derive_ood_point(&mut tr);
     {
         let one = F1::from_u64(1);
         let shift_inv = shift.inv();
+        // z lies on the coset iff (z/shift)^(2^k) == 1
         let is_on_coset = |zz: F1| {
             let mut t = zz * shift_inv; // z/shift
             for _ in 0..lde_k_log2 {
@@ -125,24 +130,20 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
             t == one
         };
         while is_on_coset(z) {
-            z = z + one; // deterministic nudge
+            z = z + one; // deterministic nudge off the coset
         }
     }
 
-    // (Compatibility for now) Collect layer-0 values as F1 for higher-layer folds,
-    // but build the layer-0 Merkle **root** from a streaming builder (no full layer
-    // needed for the root).
+    // Keep layer-0 root streaming-only, but also collect values for higher layers.
     let mut lde_vals: Vec<F1> = Vec::with_capacity(lde_n);
     let mut l0_builder = StreamingLayerBuilder::new(lde_n);
 
-    // Provide base-domain composition values to the streaming engine.
-    // We also add the ZK mask R(ω^i) here. We maintain a rolling `ω^i`.
+    // Base-domain composition with ZK mask R(ω^i), streamed into LDE/DEEP engine.
     let mut last_i = 0usize;
     let mut x_pow = F1::from_u64(1); // ω^0
     let mut base_eval = |i: usize| -> [u8; 8] {
-        // Keep sequential for efficiency; fallback is linear catch-up if needed.
+        // Maintain ω^i incrementally in-order; if we ever go backwards, restart.
         if i < last_i {
-            // Restart safely (should not happen with a well-behaved streaming engine).
             last_i = 0;
             x_pow = F1::from_u64(1);
         }
@@ -156,8 +157,8 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         (comp + mask).to_le_bytes()
     };
 
-    // Chunk size for emitting layer-0 values (in elements).
-    let out_chunk_log2 = 12usize; // 4096
+    // Emit layer-0 values in chunks (elements), keeping memory flat.
+    let out_chunk_log2 = 12usize; // 4096 elems/chunk
     deep_coset_lde_stream(
         &mut base_eval,
         tc.n,
@@ -166,10 +167,9 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         z,
         out_chunk_log2,
         |chunk_le| {
-            // Feed the streaming Merkle builder directly.
+            // Contribute to streaming layer-0 Merkle root…
             l0_builder.absorb_leaves(chunk_le);
-
-            // (Compatibility for now) Collect as F1 for current FRI higher-layer logic.
+            // …and (for now) also retain values for in-memory upper layers.
             for le in chunk_le {
                 let v = F1::from_u64(u64::from_le_bytes(*le));
                 lde_vals.push(v);
@@ -188,7 +188,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         fri_roots_vec.push(root0);
     }
 
-    // Number of folds and sample betas AFTER binding layer-0 root.
+    // Number of folds and betas (after binding root0).
     let mut tmp = lde_n;
     let mut n_folds = 0usize;
     while tmp > 1 {
@@ -197,12 +197,12 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
     }
     let betas = params::derive_betas_for_fri(&mut tr, n_folds);
 
-    // Commit subsequent layer roots using a single re-usable scratch buffer.
-    // (These remain in-place folds for now; a future step will stream these too.)
+    // Fold in-place into `scratch`, committing each layer root.
     let mut cur_len = lde_n;
     let mut scratch = vec![F1::from_u64(0); lde_n / 2];
 
     if n_folds > 0 {
+        // First fold from layer-0 → layer-1
         let beta0 = betas[0];
         let next_len = cur_len / 2;
         for i in 0..next_len {
@@ -219,7 +219,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
             fri_roots_vec.push(root1);
         }
 
-        // Remaining folds in place
+        // Remaining folds (layer r → r+1)
         for r in 1..n_folds {
             let half = cur_len / 2;
             let beta = betas[r];
@@ -238,15 +238,16 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         }
     }
 
-    // Final value (last layer is size 1)
+    // Final FRI value y* (the single element of the last layer).
     let final_val = if n_folds == 0 { lde_vals[0] } else { scratch[0] };
     let fri_final_value_le = final_val.to_le_bytes();
 
     /* ------------------------ AIR query row openings ------------------------ */
 
+    // Sample base-row indices AFTER FRI roots were absorbed (keeps schedule aligned).
     let rows = params::derive_queries(&mut tr, tc.n, params::NUM_QUERIES);
 
-    // Produce on-demand column openings using the streamed commitment metadata.
+    // On-demand openings against streamed column commitments.
     let mut query_openings = Vec::with_capacity(rows.len());
     for row in rows {
         // Scalars
@@ -254,7 +255,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         let is_first_open = odo.open("is_first", row);
         let is_last_open = odo.open("is_last", row);
 
-        // Per-tape
+        // Per-tape (also open next-row values used by head-update).
         let ip1 = next_wrap(row, tc.n);
         let mut per_tape = Vec::with_capacity(tc.tau);
         for r in 0..tc.tau {
@@ -292,14 +293,14 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
 
     /* ------------------- FRI queries (layer-0 streaming) -------------------- */
 
-    // After roots are bound into the transcript, derive query indices
+    // After roots are bound into the transcript, derive FRI query indices.
     let fri_rows = params::derive_queries(&mut tr, lde_n, params::NUM_QUERIES);
 
-    // Number of layers = roots.len(); we must emit exactly (n_layers - 1) pairs per query.
+    // Number of layers = roots.len(); emit exactly (n_layers - 1) pairs per query.
     let n_layers = fri_roots_vec.len();
     let mut fri_queries = Vec::with_capacity(fri_rows.len());
 
-    // Seed empty queries with the right-sized positions list
+    // Seed queries with the right-sized positions list.
     for _ in 0..fri_rows.len() {
         fri_queries.push(crate::v1::proof::FriQuery {
             positions: vec![0; n_layers],
@@ -307,7 +308,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         });
     }
 
-    // ---------- Layer 0: open **streaming** against the layer-0 codeword ----------
+    // --- Layer 0: open **streaming** against the layer-0 codeword.
     {
         let n0 = lde_n;
         let half0 = n0 / 2;
@@ -332,8 +333,8 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
                         }
                         last_i_q = i;
 
-                        let comp = compose_row(&tc, i, &alphas)
-                            + compose_boundary(&tc, i, &alphas);
+                        let comp =
+                            compose_row(&tc, i, &alphas) + compose_boundary(&tc, i, &alphas);
                         let mask = eval_masks_sum_at(&mask_coeffs, x_pow_q);
                         (comp + mask).to_le_bytes()
                     };
@@ -367,8 +368,8 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
                         }
                         last_i_q = i;
 
-                        let comp = compose_row(&tc, i, &alphas)
-                            + compose_boundary(&tc, i, &alphas);
+                        let comp =
+                            compose_row(&tc, i, &alphas) + compose_boundary(&tc, i, &alphas);
                         let mask = eval_masks_sum_at(&mask_coeffs, x_pow_q);
                         (comp + mask).to_le_bytes()
                     };
@@ -396,9 +397,9 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
         }
     }
 
-    // ---------- Layers 1..(n_layers-2): open on current layer, then fold ----------
+    // --- Layers 1..(n_layers-2): open on current layer, then fold.
     if n_layers > 1 {
-        // Compute layer 1 values into scratch (from layer 0) once, ACROSS-HALVES.
+        // Compute layer 1 values (from layer 0) once, across halves.
         let mut cur_len_q = lde_n / 2;
         {
             let beta0 = betas[0];
@@ -424,10 +425,10 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
                 let vi_r_le = scratch[idx_r].to_le_bytes();
                 let vj_r_le = scratch[j_r].to_le_bytes();
 
-                // Record pair for layer r
+                // Record pair for layer r.
                 fri_queries[qi].pairs.push((vi_r_le, pi_r.sibs, vj_r_le, pj_r.sibs));
 
-                // Propagate next index
+                // Propagate next index.
                 if r + 1 <= n_layers - 2 {
                     fri_queries[qi].positions[r + 1] = idx_r % half;
                 } else {
@@ -435,7 +436,7 @@ pub fn prove_v1(blocks: &[BlockSummary], manifest_root: [u8; 32]) -> Result<Proo
                 }
             }
 
-            // Fold r -> r+1
+            // Fold r → r+1
             if r < n_layers - 1 {
                 let beta = betas[r];
                 for i in 0..half {

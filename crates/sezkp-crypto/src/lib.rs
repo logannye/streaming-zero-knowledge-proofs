@@ -1,9 +1,25 @@
-// crates/sezkp-crypto/src/lib.rs
-
 //! Minimal crypto substrate: Blake3 transcript with a simple absorb/challenge API.
 //!
 //! ⚠️ **Security note:** This is a scaffolding layer for experiments/tests. It models a
 //! domain-separated random oracle using Blake3 but is **not** a final protocol design.
+//! Do not treat this as a hardened transcript construction without a dedicated review.
+//!
+//! ## Overview
+//! - [`Transcript`] is a tiny trait: absorb bytes under a label, squeeze challenges.
+//! - [`Blake3Transcript`] is a deterministic, domain-separated implementation built on BLAKE3.
+//! - [`Label`] centralizes canonical labels to avoid stringly-typed mistakes.
+//! - [`TranscriptExt`] provides ergonomic helpers for `Label` and common patterns.
+//!
+//! ### Example
+//! ```
+//! use sezkp_crypto::{Blake3Transcript, Transcript, TranscriptExt, Label};
+//!
+//! let mut tr = Blake3Transcript::new("my-protocol/v1");
+//! tr.absorb_label(Label::Params, b"N=1<<20");
+//! tr.absorb_u64("seed/round", 0);
+//! let chal = tr.challenge_bytes_label(Label::FriQuery, 32);
+//! assert_eq!(chal.len(), 32);
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -20,11 +36,15 @@ use blake3::Hasher;
 use std::io::Read;
 
 /// Fixed domain prefix to seed transcripts.
+///
+/// Included before the user-supplied domain string to reduce the risk of
+/// cross-protocol collisions across the workspace.
 const TRANSCRIPT_PREFIX: &[u8] = b"sezkp.transcript.v0";
 
 /// Transcript interface used across backends.
 ///
-/// Implementations should apply domain separation for both absorbs and challenges.
+/// Implementations must apply **domain separation** for both absorbs and challenges.
+/// All methods should be deterministic with respect to the transcript state.
 pub trait Transcript {
     /// Add raw bytes under a label (domain-separated).
     fn absorb(&mut self, label: &str, bytes: &[u8]);
@@ -73,11 +93,9 @@ impl Transcript for Blake3Transcript {
         // Domain separation for each absorb:
         //   tag "absorb", label length+bytes, payload length+bytes.
         self.st.update(b"absorb");
-        self.st
-            .update(&(label.len() as u32).to_le_bytes());
+        self.st.update(&(label.len() as u32).to_le_bytes());
         self.st.update(label.as_bytes());
-        self.st
-            .update(&(bytes.len() as u32).to_le_bytes());
+        self.st.update(&(bytes.len() as u32).to_le_bytes());
         self.st.update(bytes);
     }
 
@@ -90,11 +108,13 @@ impl Transcript for Blake3Transcript {
 
         let mut rdr = st.finalize_xof();
         let mut out = vec![0u8; n];
-        // `OutputReader` implements `Read` and is infallible for exact reads.
-        rdr.read_exact(&mut out)
-            .expect("blake3::OutputReader should not fail");
 
-        // Model transcript "forward progress" after a challenge.
+        // `OutputReader` implements `Read`. Exact reads should not fail for a BLAKE3 XOF.
+        // We keep the panic to preserve the trait's infallible signature.
+        rdr.read_exact(&mut out)
+            .expect("blake3::OutputReader::read_exact should not fail");
+
+        // Model transcript "forward progress" after a challenge so future challenges differ.
         self.st.update(b"after_challenge");
         self.st.update(&(label.len() as u32).to_le_bytes());
         self.st.update(label.as_bytes());
@@ -103,37 +123,7 @@ impl Transcript for Blake3Transcript {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Blake3Transcript, Transcript};
-
-    #[test]
-    fn determinism_and_label_sep() {
-        let mut t1 = Blake3Transcript::new("dom");
-        let mut t2 = Blake3Transcript::new("dom");
-
-        t1.absorb("a", b"hello");
-        t2.absorb("a", b"hello");
-
-        assert_eq!(t1.challenge_bytes("c", 32), t2.challenge_bytes("c", 32));
-
-        let mut t3 = Blake3Transcript::new("dom");
-        t3.absorb("a", b"hello");
-        // Different label → different output.
-        assert_ne!(t1.challenge_bytes("c", 32), t3.challenge_bytes("d", 32));
-    }
-
-    #[test]
-    fn domain_separation_changes_output() {
-        let mut t1 = Blake3Transcript::new("dom1");
-        let mut t2 = Blake3Transcript::new("dom2");
-        t1.absorb("x", b"payload");
-        t2.absorb("x", b"payload");
-        assert_ne!(t1.challenge_bytes("c", 16), t2.challenge_bytes("c", 16));
-    }
-}
-
-/// Canonical transcript labels used across the v1 STARK.
+/// Canonical transcript labels used across the SEZKP protocols.
 /// Avoids stringly-typed mistakes in domain separation.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Label {
@@ -167,5 +157,90 @@ impl Label {
             Label::FriFinal => "sezkp/fri_final",
             Label::Manifest => "sezkp/manifest",
         }
+    }
+}
+
+/// Ergonomic helpers implemented for all [`Transcript`]s.
+///
+/// These avoid manual `label.as_str()` calls and provide a couple of handy
+/// convenience methods (e.g., `challenge_u64`).
+pub trait TranscriptExt: Transcript {
+    /// Absorb bytes under a canonical [`Label`].
+    fn absorb_label(&mut self, label: Label, bytes: &[u8]) {
+        self.absorb(label.as_str(), bytes);
+    }
+
+    /// Squeeze `n` bytes as a challenge under a canonical [`Label`].
+    #[must_use]
+    fn challenge_bytes_label(&mut self, label: Label, n: usize) -> Vec<u8> {
+        self.challenge_bytes(label.as_str(), n)
+    }
+
+    /// Challenge as a little-endian `u64` under an arbitrary string label.
+    #[must_use]
+    fn challenge_u64(&mut self, label: &str) -> u64 {
+        let mut buf = [0u8; 8];
+        buf.copy_from_slice(&self.challenge_bytes(label, 8));
+        u64::from_le_bytes(buf)
+    }
+
+    /// Challenge as a little-endian `u64` under a canonical [`Label`].
+    #[must_use]
+    fn challenge_u64_label(&mut self, label: Label) -> u64 {
+        self.challenge_u64(label.as_str())
+    }
+}
+
+impl<T: Transcript + ?Sized> TranscriptExt for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::{Blake3Transcript, Label, Transcript, TranscriptExt};
+
+    #[test]
+    fn determinism_and_label_sep() {
+        let mut t1 = Blake3Transcript::new("dom");
+        let mut t2 = Blake3Transcript::new("dom");
+
+        t1.absorb("a", b"hello");
+        t2.absorb("a", b"hello");
+
+        assert_eq!(t1.challenge_bytes("c", 32), t2.challenge_bytes("c", 32));
+
+        let mut t3 = Blake3Transcript::new("dom");
+        t3.absorb("a", b"hello");
+        // Different label → different output.
+        assert_ne!(t1.challenge_bytes("c", 32), t3.challenge_bytes("d", 32));
+    }
+
+    #[test]
+    fn domain_separation_changes_output() {
+        let mut t1 = Blake3Transcript::new("dom1");
+        let mut t2 = Blake3Transcript::new("dom2");
+        t1.absorb("x", b"payload");
+        t2.absorb("x", b"payload");
+        assert_ne!(t1.challenge_bytes("c", 16), t2.challenge_bytes("c", 16));
+    }
+
+    #[test]
+    fn extension_trait_helpers_work() {
+        let mut t = Blake3Transcript::new("dom");
+        t.absorb_label(Label::Params, b"N=1<<20");
+        let x = t.challenge_u64_label(Label::FriFinal);
+        // Make sure it's at least deterministic across identical transcripts:
+        let mut t2 = Blake3Transcript::new("dom");
+        t2.absorb_label(Label::Params, b"N=1<<20");
+        let y = t2.challenge_u64_label(Label::FriFinal);
+        assert_eq!(x, y);
+    }
+
+    #[test]
+    fn state_progression_changes_future_challenges() {
+        // After a challenge, the internal hasher is advanced; the next challenge differs.
+        let mut t = Blake3Transcript::new("dom");
+        t.absorb("x", b"p");
+        let c1 = t.challenge_bytes("c", 16);
+        let c2 = t.challenge_bytes("c", 16);
+        assert_ne!(c1, c2);
     }
 }

@@ -4,7 +4,25 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "SEZKP crypto substrate: hash traits and a simple transcript/RO"
+# Optional but useful metadata for discoverability/docs:
+keywords = ["zkp", "stark", "transcript", "blake3", "crypto"]
+categories = ["cryptography", "algorithms"]
+rust-version = "1.74"
 
 [dependencies]
 anyhow = "1"
 blake3 = "1.5"
+
+# Light repo-wide lint defaults that complement crate-level attributes.
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+no-default-features = false

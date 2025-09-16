@@ -21,7 +21,9 @@
 )]
 
 use crate::v1::field::F1;
-use sezkp_ffts::{coset::evaluate_on_coset_pow2, goldilocks_primitive_root_2exp, ntt::interpolate_from_evals};
+use sezkp_ffts::{
+    coset::evaluate_on_coset_pow2, goldilocks_primitive_root_2exp, ntt::interpolate_from_evals,
+};
 
 /// Drives: base-domain -> (interpolate) -> LDE on coset -> DEEP divide,
 /// streaming the resulting y[i]/(x_i - z) in chunks to a consumer.

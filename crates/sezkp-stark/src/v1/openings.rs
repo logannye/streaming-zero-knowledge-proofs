@@ -37,6 +37,8 @@ fn total_rows(blocks: &[BlockSummary]) -> usize {
         .sum()
 }
 
+/* --------------------------- Column label plumbing ------------------------- */
+
 /// Column label grammar and dispatch.
 #[derive(Clone, Debug)]
 enum TapeColKind {
@@ -113,6 +115,8 @@ fn all_labels(tau: usize) -> Vec<String> {
     out
 }
 
+/* ----------------------------- Small helpers ------------------------------- */
+
 #[inline]
 fn f_le_u64(x: u64) -> [u8; 8] {
     F1::from_u64(x).to_le_bytes()
@@ -121,6 +125,8 @@ fn f_le_u64(x: u64) -> [u8; 8] {
 fn f_le_i64(x: i64) -> [u8; 8] {
     F1::from_i64(x).to_le_bytes()
 }
+
+/* -------------------------- Reconstruct row values -------------------------- */
 
 /// One row of committed columns (values already encoded as 8-byte LE).
 #[derive(Clone, Debug)]
@@ -172,6 +178,7 @@ impl RowSnapshot {
 }
 
 /// Row-wise iterator that reconstructs the committed columns exactly.
+/// (Semantics match `columns_stream.rs` and `columns.rs`.)
 struct RowIter<'a> {
     blocks: &'a [BlockSummary],
     tau: usize,
@@ -264,6 +271,8 @@ impl<'a> Iterator for RowIter<'a> {
         Some(row)
     }
 }
+
+/* --------------------------- On-demand openings ---------------------------- */
 
 /// On-demand openings over streamed column commitments.
 pub struct OnDemandOpenings<'a> {

@@ -1,11 +1,25 @@
-// crates/sezkp-core/src/evaluator.rs
-
 //! One-shot evaluator with an internal bottom-up scheduler.
 //!
 //! Replays leaf blocks to finite-state summaries, checks interfaces via the
-//! replayer, and combines them up to the root using a [`Combiner`].
+//! exact replayer, and combines them up to the root using a [`Combiner`].
 //!
-//! No external scheduler dependency is required.
+//! This evaluator is intentionally single-shot and self-contained: callers pass
+//! a slice of [`BlockSummary`] and receive the root [`FiniteState`]. There is no
+//! external scheduler dependency.
+//!
+//! ## Algorithm sketch
+//! 1. Replay each leaf block `k` into Σ([k,k]) using [`ExactReplayer`].
+//! 2. For spans `1,2,4,...`, combine adjacent intervals bottom-up:
+//!    Σ([i,mid]) ⊕ Σ([mid+1,j]) → Σ([i,j]).
+//! 3. Enforce interface equality with the *authoritative* replayer check before
+//!    combining. (The combiner only sees constant-size summaries.)
+//!
+//! ## Complexity
+//! - Time: `O(n)` replays + `O(n)` combines = `O(n)`.
+//! - Space: `O(n)` transient map of intermediate Σ([i,j]) states.
+//!
+//! Prefer [`Evaluator::evaluate_root_checked`] in library code; it returns a rich
+//! error instead of panicking on internal inconsistencies.
 
 use crate::replay::BoundedReplay; // bring trait into scope for method calls
 use crate::{BlockSummary, Combiner, ConstantCombiner, ExactReplayer, FiniteState};
@@ -106,6 +120,7 @@ impl Evaluator {
                 }
 
                 let parent_key = Key(start, end);
+                // Combine constant-size summaries. Precondition already checked above.
                 let fs = self.combiner.combine(left, right);
                 map.insert(parent_key, fs);
 

@@ -1,7 +1,11 @@
 //! Simple multiplicative cosets for power-of-two subgroup domains (Goldilocks).
+//!
+//! A coset of a subgroup domain `⟨gen⟩` is `shift · ⟨gen⟩` with `shift ∈ F*`.
+//! In STARKs, we often evaluate polynomials on such cosets (low-degree extension).
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
+#![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 
 use crate::ntt::forward_ntt_in_place;
 use crate::{domain::Pow2Domain, Goldilocks as F};
@@ -12,7 +16,7 @@ use crate::{domain::Pow2Domain, Goldilocks as F};
 pub struct CosetDomain {
     /// Base `2^k` subgroup domain.
     pub base: Pow2Domain,
-    /// Shift (coset representative), ideally chosen outside the subgroup.
+    /// Shift (coset representative), **must be non-zero**.
     pub shift: F,
 }
 
@@ -33,34 +37,39 @@ impl CosetDomain {
 }
 
 /// Build a coset from a base domain and an explicit shift.
+///
+/// # Panics
+/// Panics in debug builds if `shift == 0`.
 #[inline]
 #[must_use]
 pub fn coset_from_pow2(base: Pow2Domain, shift: F) -> CosetDomain {
+    debug_assert!(shift != F::zero(), "coset shift must be non-zero");
     CosetDomain { base, shift }
 }
 
 /// Convenience: pick a default shift for a given `2^k` base domain.
 ///
 /// In production, sample uniformly from `F*` and reject subgroup elements.
-/// Here we use `3` for demos.
+/// Here we use `3` for demos (non-zero, cheap).
 #[inline]
 #[must_use]
 pub fn default_coset(base: Pow2Domain) -> CosetDomain {
     let shift = F::from_u64(3);
-    CosetDomain { base, shift }
+    coset_from_pow2(base, shift)
 }
 
 /* ------------------------ Coset LDE helper functions ------------------------ */
 
 /// Evaluate a polynomial (given by coefficients) on a coset of size `2^k`.
 ///
-/// Standard trick: `f(shift·x)` at subgroup points `x` equals the NTT of
-/// coefficients scaled by `shift^j` (i.e., `g_j = coeff_j * shift^j`).
+/// Standard trick: evaluating `f(shift·x)` over subgroup points `x` equals the NTT
+/// of **shift-scaled coefficients** `g_j = coeff_j * shift^j`.
 ///
-/// Semantics when `coeffs.len() > 2^k`:
-/// we **truncate** to the first `2^k` coefficients (mod `x^{2^k}-1` behavior).
+/// Semantics when `coeffs.len() > 2^k`: we **truncate** to the first `2^k`
+/// coefficients (i.e., arithmetic modulo `x^{2^k} - 1`).
 #[must_use]
 pub fn evaluate_on_coset_pow2(coeffs: &[F], k_log2: usize, shift: F) -> Vec<F> {
+    debug_assert!(shift != F::zero(), "coset shift must be non-zero");
     let n = 1usize << k_log2;
 
     // Scale coefficients by shift^j and zero-pad to n.

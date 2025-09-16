@@ -1,10 +1,13 @@
-// crates/sezkp-stark/src/commit.rs
-
 //! Streaming commitment (hash-as-you-go) over the single row stream.
 //!
-//! For v0 we commit to the *single* row stream. We implement this with a
-//! transcript: absorb all row bytes in order with domain separation, then
-//! derive a 32-byte challenge as the commitment “root”.
+//! For v0 we commit to the *single* row stream produced by encoding each block’s
+//! rows (fixed-width layout). We implement this with a transcript: absorb all
+//! row bytes in order with domain separation, then derive a 32-byte challenge
+//! as the commitment “root”. This keeps memory bounded and works with large
+//! traces.
+//!
+//! Safety: prior to streaming, each block is validated against the minimal AIR
+//! (`check_block_invariants`), and `τ` (number of tapes) must remain constant.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -37,17 +40,20 @@ pub struct CommitResult {
 /// Compute a streaming commitment over the encoded rows with a transcript.
 ///
 /// Validates each block’s write-in-window invariant and checks `tau` consistency
-/// across all blocks before streaming.
+/// across all blocks before streaming. The streaming encoder emits rows in fixed
+/// width, so the transcript can absorb opaque byte chunks without re-parsing.
+///
+/// Returns the final commitment and how many rows were streamed.
 pub fn commit_blocks(blocks: &[BlockSummary]) -> Result<CommitResult> {
     if blocks.is_empty() {
-        // Deterministic empty-domain commitment.
+        // Deterministic empty-domain commitment (use a distinct DS).
         let mut tr = Blake3Transcript::new("sezkp-stark/v0/row-stream/empty");
         let mut root = [0u8; 32];
         root.copy_from_slice(&tr.challenge_bytes("root", 32));
         return Ok(CommitResult { root, n_rows: 0, tau: 0 });
     }
 
-    // Sanity: block invariants (write-in-window) and constant τ.
+    // --- Sanity: per-block invariants and constant τ across blocks.
     for (k, b) in blocks.iter().enumerate() {
         air::check_block_invariants(b).with_context(|| {
             format!("ARE validation failed for block #{k} (k={}): invariant violation", b.block_id)
@@ -64,16 +70,16 @@ pub fn commit_blocks(blocks: &[BlockSummary]) -> Result<CommitResult> {
         );
     }
 
-    // Domain-separated transcript for the row stream.
+    // --- Domain-separated transcript for the row stream commitment.
     let mut tr = Blake3Transcript::new("sezkp-stark/v0/row-stream");
     tr.absorb_u64("tau", tau as u64);
 
-    // Stream rows in fixed-size chunks to bound memory.
+    // --- Stream rows in fixed-size chunks to bound memory.
     const CHUNK_ROWS: usize = 4096;
     let mut total_rows: u64 = 0;
     witness::stream_rows(blocks, CHUNK_ROWS, |chunk| {
         tr.absorb("rows", chunk);
-        // Each chunk is a whole-number multiple of row_size(tau).
+        // Each chunk is a whole-number multiple of row_size(tau) by construction.
         total_rows += (chunk.len() / witness::row_size(tau)) as u64;
     });
 

@@ -1,16 +1,18 @@
-// crates/sezkp-core/tests/invariants.rs
-
-//! Invariant tests for replay and finite-state combination.
-
-#![allow(unused_variables)]
+//! Invariants for replay (ARE) and finite-state combination.
+//!
+//! These tests treat:
+//! - the **replay engine** as authoritative for interface equality (control +
+//!   input head continuity) and write-safety inside per-tape windows, and
+//! - the **combiner** as a pure projection that should compose associatively
+//!   when interfaces chain.
 
 use proptest::prelude::*;
 use sezkp_core::{
-    BlockSummary, BoundedReplay, Combiner, ConstantCombiner, ExactReplayer, FiniteState, MovementLog,
-    Offset, StepProjection, TapeOp, Window,
+    BlockSummary, BoundedReplay, Combiner, ConstantCombiner, ExactReplayer, FiniteState,
+    MovementLog, Offset, StepProjection, TapeOp, Window,
 };
 
-/// Convenience: build a `BlockSummary` with the essentials for tests.
+/// Build a `BlockSummary` with the essentials for tests.
 ///
 /// Assumes all per-tape vectors have equal length `tau = windows.len()`.
 #[track_caller]
@@ -39,7 +41,8 @@ fn mk_block(
 
     // Lightweight, saturating step index math for determinism in tests.
     let step_len = steps.len() as u64;
-    let step_lo = 1u64.saturating_add((block_id as u64).saturating_sub(1).saturating_mul(step_len));
+    let step_lo =
+        1u64.saturating_add((block_id as u64).saturating_sub(1).saturating_mul(step_len));
     let step_hi = (block_id as u64).saturating_mul(step_len);
 
     BlockSummary {
@@ -75,19 +78,12 @@ fn mk_step(input_mv: i8, tau: usize, mv: i8) -> StepProjection {
 fn replay_block_basic() {
     let tau = 2usize;
     let steps = vec![mk_step(1, tau, 0); 4];
-    let windows = vec![Window { left: 0, right: 3 }, Window { left: -1, right: 2 }];
+    let windows = vec![
+        Window { left: 0, right: 3 },
+        Window { left: -1, right: 2 },
+    ];
 
-    let blk = mk_block(
-        1,
-        7,
-        8,
-        0,
-        4,
-        windows,
-        vec![0, 1],
-        vec![3, 2],
-        steps,
-    );
+    let blk = mk_block(1, 7, 8, 0, 4, windows, vec![0, 1], vec![3, 2], steps);
 
     let rep = ExactReplayer::new(Default::default());
     let fs = rep.replay_block(&blk);
@@ -151,7 +147,7 @@ fn combiner_associative_projection() {
     assert_eq!(left.tag, d.tag);
 }
 
-// Property: interface_ok detects mismatches and accepts matches.
+// Property: Replay::interface_ok detects mismatches and accepts matches.
 proptest! {
     #[test]
     fn interface_ok_roundtrip(
@@ -202,7 +198,7 @@ proptest! {
 
 /// Negative test: writes outside a window are rejected by the replay engine.
 ///
-/// ExactReplayer wraps the fallible engine and will panic on error.
+/// `ExactReplayer` wraps the fallible engine and will panic on error.
 #[test]
 #[should_panic(expected = "write outside window")]
 fn replay_rejects_write_outside_window() {

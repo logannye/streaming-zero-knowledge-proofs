@@ -1,8 +1,21 @@
-// crates/sezkp-fold/src/are_replay.rs
+//! ARE (interface replay) proofs used during folding.
+//!
+//! This module maintains **two** wire-compatible proof variants:
+//! - `V1Mac`: legacy Blake3 MAC over the interface witness (deprecated).
+//! - `V2Stark`: preferred path using a tiny STARK over child π prefixes.
+//!
+//! Keeping both variants allows painless upgrades while preserving
+//! forwards/backwards read-compat for artifacts.
+//
+//  Note: The streaming layer no longer exposes raw `π` on the wire; callers
+//  should commit to `π` with `api::commit_pi` and carry the opaque commitment
+//  alongside whichever ARE proof variant they use. Internally, verifiers will
+//  still need access to the underlying `π` to check V2 proofs.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
 #![warn(
+    missing_docs,
     clippy::all,
     clippy::pedantic,
     clippy::nursery,
@@ -25,7 +38,7 @@ pub const DS_ARE_V1: &str = "fold/are/v1";
 /// Version label for the Stark variant (kept here for clarity).
 pub const DS_ARE_V2: &str = "fold/are/v2";
 
-/// ARE proof encoding.
+/// ARE proof encoding (wire-stable).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AreProof {
     /// Deprecated; kept for backwards compatibility.
@@ -36,7 +49,7 @@ pub enum AreProof {
 
 /* ------------------------------- V1 (MAC) ---------------------------------- */
 
-/// Legacy MAC over the interface witness (deprecated).
+/// Construct the legacy MAC over the interface witness (deprecated).
 #[must_use]
 pub fn prove_replay(iface: &InterfaceWitness) -> AreProof {
     let mut h = Hasher::new();
@@ -47,7 +60,7 @@ pub fn prove_replay(iface: &InterfaceWitness) -> AreProof {
     AreProof::V1Mac(*h.finalize().as_bytes())
 }
 
-/// Legacy verify (deprecated).
+/// Verify the legacy MAC proof (deprecated).
 #[must_use]
 pub fn verify_replay(iface: &InterfaceWitness, proof: &AreProof) -> bool {
     match proof {
@@ -68,8 +81,9 @@ pub fn verify_replay(iface: &InterfaceWitness, proof: &AreProof) -> bool {
 
 /* ------------------------- V2: child-π-backed path ------------------------- */
 
-/// Extract left-tail and right-head 2×u64 prefixes from π.acc.
+#[inline]
 fn limbs_from_pi(pi: &Pi) -> ([u64; 2], [u64; 2]) {
+    // Extract left-tail and right-head 2×u64 prefixes from π.acc.
     let le = |i: usize| u64::from_le_bytes(pi.acc[i].to_le_bytes());
     let lt = [le(0), le(1)]; // left-tail prefix (2 limbs)
     let rh = [le(2), le(3)]; // right-head prefix (2 limbs)
@@ -77,6 +91,10 @@ fn limbs_from_pi(pi: &Pi) -> ([u64; 2], [u64; 2]) {
 }
 
 /// Prove ARE interface from **children π** (preferred V2 path).
+///
+/// The STARK checks that `right.head_prefix == left.tail_prefix` and control
+/// chaining is respected at the interface.
+#[must_use]
 pub fn prove_replay_from_children(left: &Pi, right: &Pi, _iface: &InterfaceWitness) -> AreProof {
     // rh(left) must equal lt(right)
     let (_lt_l, rh_l) = limbs_from_pi(left);
@@ -100,6 +118,7 @@ pub fn prove_replay_from_children(left: &Pi, right: &Pi, _iface: &InterfaceWitne
 }
 
 /// Verify ARE interface from **children π** (preferred V2 path).
+#[must_use]
 pub fn verify_replay_from_children(left: &Pi, right: &Pi, proof: &AreProof) -> bool {
     let (_lt_l, rh_l) = limbs_from_pi(left);
     let (lt_r, _rh_r) = limbs_from_pi(right);

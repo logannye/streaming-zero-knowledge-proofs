@@ -1,11 +1,14 @@
-// crates/sezkp-scheduler/src/lib.rs
-
-//! Height-compressed scheduler (HCT) with pointerless DFS.
+//! Height-compressed scheduler (HCT) with pointerless DFS over half-open spans.
 //!
-//! - Balanced splits on `[lo, hi)` intervals (midpoint).
-//! - Pointerless, post-order DFS using O(1) tokens per level (O(log T) live).
-//! - No index arrays; callbacks fire in left-to-right order for leaves,
-//!   and in post-order for merges.
+//! The API in this file uses **half-open** intervals `[lo, hi)` and exposes
+//! two building blocks:
+//! - `dfs`: pointerless, post-order DFS with balanced splits (midpoint).
+//! - `max_live_frames`: an O(1)-overhead estimator of maximum stack depth.
+//!
+//! Many consumers prefer half-open intervals for easier arithmetic, while the
+//! `dfs.rs` module (in the same crate) provides a DFS iterator that works with
+//! the **inclusive** interval type defined in `sezkp_core`. Use whichever fits
+//! the rest of your pipeline best—both implement the same balanced traversal.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -21,9 +24,9 @@
 /// Half-open interval `[lo, hi)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Interval {
-    /// inclusive lower bound
+    /// Inclusive lower bound.
     pub lo: u32,
-    /// exclusive upper bound
+    /// Exclusive upper bound.
     pub hi: u32,
 }
 
@@ -70,13 +73,23 @@ pub fn balanced_tree(t: usize) -> Interval {
     Interval::new(0, t as u32)
 }
 
-/// Pointerless post-order DFS with balanced splits.
+/// Pointerless post-order DFS with balanced splits over `[0, T)`.
 ///
 /// - `t`: number of leaves
 /// - `on_leaf(span)`: called for each unit interval `[i, i+1)` in order
 /// - `on_merge(span)`: called after both children of `span` were processed
 ///
 /// Memory: ≤ `O(log t)` frames; no node allocations.
+///
+/// ### Example
+/// ```
+/// use sezkp_scheduler::{dfs, balanced_tree, Interval};
+/// let mut leaves = Vec::new();
+/// let mut merges = Vec::new();
+/// dfs(5, |s| leaves.push(s), |s| merges.push(s));
+/// assert_eq!(leaves.len(), 5);
+/// assert_eq!(merges.last().unwrap(), &balanced_tree(5));
+/// ```
 pub fn dfs<FL, FM>(t: usize, mut on_leaf: FL, mut on_merge: FM)
 where
     FL: FnMut(Interval),
@@ -124,7 +137,7 @@ where
             continue;
         }
 
-        // Non-leaf first visit: descend left
+        // Non-leaf first visit: descend left.
         if top.state == 0 {
             let (l, _r) = top.span.split_mid();
             st.push(Frame { span: l, state: 0 });
@@ -171,7 +184,6 @@ pub fn max_live_frames(t: usize) -> usize {
             st.pop();
             // Bubble up through parents.
             loop {
-                // Refresh len each loop to keep max up to date.
                 let cur_len = st.len();
                 if cur_len > max_depth {
                     max_depth = cur_len;
@@ -185,7 +197,7 @@ pub fn max_live_frames(t: usize) -> usize {
                         break; // descend right
                     }
                     1 => {
-                        st.pop(); // emit merge (counted by caller if needed)
+                        st.pop(); // merge
                                   // continue bubbling
                     }
                     _ => unreachable!(),

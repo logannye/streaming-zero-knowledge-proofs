@@ -1,5 +1,3 @@
-// crates/sezkp-vm-riscv/src/lib.rs
-
 //! `sezkp-vm-riscv`: example VM adapter (stub).
 //!
 //! This is a placeholder showing where a real RISC-V adapter would live. It will
@@ -8,6 +6,9 @@
 //! For demos, we expose:
 //! - `make_trace(steps)`: build a toy 2-tape trace using `sezkp-trace`’s generator.
 //! - `RiscvAdapter::demo_block(...)`: synthesize a single block summary σ_k.
+//!
+//! Production note: this crate intentionally stays tiny and dependency-light so it
+//! can be used in examples and tests without requiring a full VM toolchain.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -42,6 +43,7 @@ impl RiscvAdapter {
     /// Convert a hypothetical RISC-V execution segment into a single σ_k for demos.
     ///
     /// The block contains `len` steps, two tapes, and zero control changes.
+    /// Values here are deterministic and simple so tests remain readable.
     pub fn demo_block(block_id: u32, len: usize) -> Result<BlockSummary> {
         let steps = vec![
             StepProjection {

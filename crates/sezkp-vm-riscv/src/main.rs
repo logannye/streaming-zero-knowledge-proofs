@@ -1,6 +1,19 @@
-// crates/sezkp-vm-riscv/src/main.rs
-
-//! Small CLI to run the VM and optionally do the full pipeline.
+//! Small CLI to run the VM stub and exercise the full pipeline end-to-end.
+//!
+//! Steps:
+//! 1) Generate a toy trace (`--steps`, 2 tapes) and write it to `trace.cbor`.
+//! 2) Partition into σ_k blocks of size `--b` and write `blocks.cbor`.
+//! 3) Commit leaves → `manifest.cbor` (Merkle root).
+//! 4) Prove with selected backend (`--proto v0|v1|fold`) → `proof.cbor`.
+//! 5) Verify: checks blocks vs manifest, and verifies the proof.
+//!
+//! Folding backend knobs (forwarded via env to `sezkp-fold`):
+//!   --fold-mode balanced|minram
+//!   --wrap-cadence N
+//!
+//! Usage (example):
+//!   cargo run -p sezkp-vm-riscv --release -- \
+//!     --steps 64 --b 4 --proto fold --fold-mode balanced --wrap-cadence 0
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -19,12 +32,10 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use sezkp_core::ProvingBackend;
+use sezkp_fold::FoldBackend;
 use sezkp_merkle::{commit_block_file, verify_block_file_against_manifest};
 use sezkp_stark::{StarkIOP, StarkV1};
 use sezkp_trace::{format::TraceFile, io::write_trace_cbor, partition::partition_trace};
-
-// NEW
-use sezkp_fold::FoldBackend;
 
 /// Parse a numeric flag like `--steps 32`, falling back to `default`.
 fn parse_arg<T: std::str::FromStr>(name: &str, default: T) -> T {
@@ -53,17 +64,19 @@ fn parse_str(name: &str, default: &str) -> String {
 }
 
 fn main() -> Result<()> {
-    let steps: u64 = parse_arg("steps", 32u64);
-    let b: u32 = parse_arg("b", 4u32);
+    let steps: u64 = parse_arg("steps", 32);
+    let b: u32 = parse_arg("b", 4);
     let out_dir = PathBuf::from(parse_str("out-dir", "examples/minimal-riscv"));
 
-    // New proto/streaming/folding flags
+    // Protocol choice: v0 (legacy IOP), v1 (STARK v1), fold (folding backend).
     let proto = parse_str("proto", "v0"); // v0 | v1 | fold
+
+    // Streaming/Fri flags reserved for future expansion (kept to avoid churn).
     let _stream = parse_arg::<u32>("stream", 0) != 0;
     let _chunk_log2: usize = parse_arg("chunk-log2", 12);
     let _fri_out_chunk_log2: usize = parse_arg("fri-out-chunk-log2", 12);
 
-    // Folding knobs
+    // Folding knobs (forwarded via env to sezkp-fold).
     let fold_mode = parse_str("fold-mode", "balanced"); // balanced | minram
     let wrap_cadence: u32 = parse_arg("wrap-cadence", 0);
 
@@ -91,7 +104,7 @@ fn main() -> Result<()> {
         blocks_path.display()
     );
 
-    // 3) Commit leaves → manifest root (used by STARK v1; folding ignores for now).
+    // 3) Commit leaves → manifest root (used by all backends).
     let manifest = commit_block_file(&blocks_path, &manifest_path)?;
     println!(
         "Committed leaves, root={} → {}",
@@ -99,7 +112,13 @@ fn main() -> Result<()> {
         manifest_path.display()
     );
 
-    // 4) Prove per backend
+    // 4) Prove per backend. For folding, forward CLI knobs via env so the
+    //    backend can pick them up (`opts_from_env` inside sezkp-fold).
+    if matches!(proto.as_str(), "fold" | "v2") {
+        env::set_var("SEZKP_FOLD_MODE", fold_mode.clone());
+        env::set_var("SEZKP_WRAP_CADENCE", wrap_cadence.to_string());
+    }
+
     let artifact = match proto.as_str() {
         "v0" => {
             let art = StarkIOP::prove(&blocks, manifest.root)?;
@@ -112,28 +131,26 @@ fn main() -> Result<()> {
             art
         }
         "fold" | "v2" => {
-            // The driver options are internal to sezkp-fold for now.
             let art = FoldBackend::prove(&blocks, manifest.root)?;
             println!(
-                "Proved (fold-v1) [mode={}, wrap-cadence={}]",
+                "Proved (fold-v2) [mode={}, wrap-cadence={}]",
                 fold_mode, wrap_cadence
             );
             art
         }
-        other => {
-            bail!("unknown --proto '{}'; use v0 | v1 | fold", other);
-        }
+        other => bail!("unknown --proto '{other}'; use v0 | v1 | fold"),
     };
+
     sezkp_core::io::write_proof_artifact_cbor(&proof_path, &artifact).context("write proof")?;
     println!("Wrote proof → {}", proof_path.display());
 
-    // 5) Verify
+    // 5) Verify: blocks vs manifest, then cryptographic verification.
     verify_block_file_against_manifest(&blocks_path, &manifest_path)
         .context("blocks/manifest mismatch")?;
     match proto.as_str() {
-        "v0" => sezkp_stark::StarkIOP::verify(&artifact, &blocks, manifest.root)?,
-        "v1" => sezkp_stark::StarkV1::verify(&artifact, &blocks, manifest.root)?,
-        "fold" | "v2" => sezkp_fold::FoldBackend::verify(&artifact, &blocks, manifest.root)?,
+        "v0" => StarkIOP::verify(&artifact, &blocks, manifest.root)?,
+        "v1" => StarkV1::verify(&artifact, &blocks, manifest.root)?,
+        "fold" | "v2" => FoldBackend::verify(&artifact, &blocks, manifest.root)?,
         _ => unreachable!(),
     }
     println!("Verified OK.");

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
 description = "SEZKP finite fields + naive DFT bootstrap"
+keywords = ["zkp", "fft", "ntt", "stark", "goldilocks"]
+categories = ["cryptography", "algorithms"]
+rust-version = "1.74"
 
 [dev-dependencies]
 criterion = "0.5"
@@ -12,3 +15,16 @@ criterion = "0.5"
 name = "ntt"
 harness = false
 
+# Optional lint config to complement crate-level attributes.
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[package.metadata.docs.rs]
+all-features = true
+no-default-features = false

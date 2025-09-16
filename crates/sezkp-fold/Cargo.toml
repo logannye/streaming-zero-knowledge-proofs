@@ -3,17 +3,24 @@ name = "sezkp-fold"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Height-compressed folding line with ARE micro-proofs and streaming driver"
 
 [dependencies]
 anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_cbor = "0.11"
 bincode = "1"
 blake3 = "1"
+ciborium = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_cbor = "0.11"
+serde_json = "1"
 
+# Workspace-local crates used by the library at runtime.
 sezkp-core = { path = "../sezkp-core" }
 sezkp-crypto = { path = "../sezkp-crypto" }
 sezkp-stark = { path = "../sezkp-stark" }
 sezkp-scheduler = { path = "../sezkp-scheduler" }
+sezkp-merkle = { path = "../sezkp-merkle" }
+
+[dev-dependencies]
+# Trace generation/partitioning is only needed in tests/benches.
 sezkp-trace = { path = "../../crates/sezkp-trace" }

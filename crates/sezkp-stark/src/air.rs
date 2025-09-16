@@ -1,13 +1,18 @@
-// crates/sezkp-stark/src/air.rs
-
 //! Minimal ARE “AIR” (constraint helpers).
 //!
-//! This mirrors the Algebraic Replay Engine (ARE) safety checks we already enforce:
-//! - Writes must stay within the declared window.
-//! - Endpoint equality is *not* enforced here; declared endpoints are treated
-//!   as authoritative in this prototype.
+//! These helpers mirror the (very small) Algebraic Replay Engine (ARE) safety
+//! checks we already enforce at higher layers. They are intentionally tiny and
+//! fast to keep the streaming path lightweight.
 //!
-//! Used by the streaming commitment to validate each block.
+//! What we check in this prototype:
+//! - **Write-in-window**: every write must land inside the declared `[left,right]`
+//!   window for its tape. (Movement is unrestricted; only writes are constrained.)
+//!
+//! What we **do not** check here (on purpose, for v0):
+//! - Endpoint equality (left-tail/right-head) is enforced elsewhere (e.g. fold).
+//!   This AIR treats declared endpoints/offsets as authoritative.
+//!
+//! These functions are used by the streaming commitment to validate each block.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
@@ -25,6 +30,10 @@ use anyhow::{bail, Result};
 use sezkp_core::BlockSummary;
 
 /// Run the write-in-window check once per block (matches Replay checks).
+///
+/// Heads start at `left + head_in_offsets[r]` for each tape `r`, then move by
+/// `mv ∈ {-1,0,+1}` at each row. If a write happens at that row, the current
+/// head position must be inside `[left, right]`.
 ///
 /// # Errors
 /// Returns an error if any write lands outside its declared per-tape window.
@@ -61,6 +70,8 @@ pub fn check_block_invariants(b: &BlockSummary) -> Result<()> {
 }
 
 /// Count how many step rows this block contributes.
+///
+/// Useful for sanity checks in streaming/commit paths.
 #[must_use]
 pub fn block_rows(b: &BlockSummary) -> u64 {
     b.movement_log.steps.len() as u64

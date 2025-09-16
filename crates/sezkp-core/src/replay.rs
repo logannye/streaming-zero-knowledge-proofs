@@ -1,12 +1,10 @@
-// crates/sezkp-core/src/replay.rs
-
 //! Algebraic Replay Engine (ARE)
 //!
-//! - `Replay`: fallible, production-friendly engine (returns `Result`)
-//! - `ExactReplayer`: infallible wrapper used by tests (panics on error)
-//! - `BoundedReplay` trait: minimal interface used by property tests
+//! - [`Replay`]: fallible, production-friendly engine (returns `Result`)
+//! - [`ExactReplayer`]: infallible wrapper used by tests (panics on error)
+//! - [`BoundedReplay`] trait: minimal interface used by property tests
 //!
-//! Design choice (for now):
+//! **Design choice (current)**:
 //! We treat the declared head endpoints in σ_k as *authoritative interface data*.
 //! We still *scan* the movement log to enforce bounded-window invariants (e.g. all writes
 //! lie within the declared per-tape windows), but we do not reject when replayed head
@@ -27,6 +25,7 @@ pub struct ReplayConfig {
 /// Fallible replay engine.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Replay {
+    /// Configuration toggles for replay behavior.
     pub cfg: ReplayConfig,
 }
 
@@ -42,8 +41,8 @@ impl Replay {
     /// Interface compatibility for interval composition (minimal).
     ///
     /// Minimal condition used by property tests:
-    ///  - the finite control must chain (a.ctrl_out == b.ctrl_in)
-    ///  - the input head must be continuous (a.in_head_out == b.in_head_in)
+    ///  - the finite control must chain (`a.ctrl_out == b.ctrl_in`)
+    ///  - the input head must be continuous (`a.in_head_out == b.in_head_in`)
     ///
     /// We intentionally *do not* require work-head continuity here; work-head
     /// equality is an internal detail for exact replay and can be reconstructed
@@ -58,9 +57,12 @@ impl Replay {
     /// We:
     ///   - validate basic structural consistency of `sigma` (vector lengths),
     ///   - validate declared head offsets are *within* their windows,
-    ///   - reconstruct absolute head locations at entry/exit from (window.left + offset),
+    ///   - reconstruct absolute head locations at entry/exit from `(window.left + offset)`,
     ///   - scan the movement log to ensure *writes* stay inside each window,
-    ///   - return `FiniteState` using the *declared* interface endpoints.
+    ///   - return [`FiniteState`] using the **declared** interface endpoints.
+    ///
+    /// # Errors
+    /// Returns an error if σ_k is malformed or violates write-safety.
     pub fn replay_block(&self, sigma: &BlockSummary) -> Result<FiniteState> {
         let tau = sigma.windows.len();
 
@@ -110,7 +112,7 @@ impl Replay {
         let mut _input_head = sigma.in_head_in; // kept for potential future checks
 
         for (sidx, step) in sigma.movement_log.steps.iter().enumerate() {
-            // Minimal sanity for moves (stay in {-1,0,1}); if you later expand, loosen here.
+            // Minimal sanity for moves (stay in {-1,0,1}); loosen here if needed later.
             let mv = step.input_mv;
             ensure!(
                 (-1..=1).contains(&mv),
@@ -190,11 +192,11 @@ pub trait BoundedReplay {
     /// Returns `true` if interval interfaces are compatible (see [`Replay::interface_ok`]).
     fn interface_ok(&self, a: &FiniteState, b: &FiniteState) -> bool;
 
-    /// Replays a block and returns its `FiniteState`. Panics on error.
+    /// Replays a block and returns its [`FiniteState`]. Panics on error.
     fn replay_block(&self, sigma: &BlockSummary) -> FiniteState;
 }
 
-/// Infallible wrapper around `Replay` for tests / quick demos.
+/// Infallible wrapper around [`Replay`] for tests / quick demos.
 /// Panics if replay detects an inconsistency (e.g., write outside window).
 #[derive(Debug, Clone, Copy)]
 pub struct ExactReplayer {
@@ -226,5 +228,55 @@ impl BoundedReplay for ExactReplayer {
         self.inner
             .replay_block(sigma)
             .unwrap_or_else(|e| panic!("replay_block failed: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{MovementLog, StepProjection, TapeOp, Window};
+
+    fn minimal_block(tau: usize) -> BlockSummary {
+        BlockSummary {
+            version: 1,
+            block_id: 1,
+            step_lo: 1,
+            step_hi: 1,
+            ctrl_in: 0,
+            ctrl_out: 0,
+            in_head_in: 0,
+            in_head_out: 0,
+            windows: vec![Window { left: 0, right: 0 }; tau],
+            head_in_offsets: vec![0; tau],
+            head_out_offsets: vec![0; tau],
+            movement_log: MovementLog { steps: vec![StepProjection {
+                input_mv: 0,
+                tapes: vec![TapeOp { write: None, mv: 0 }; tau],
+            }]},
+            pre_tags: vec![],
+            post_tags: vec![],
+        }
+    }
+
+    #[test]
+    fn replay_block_minimal_ok() {
+        let r = Replay::new();
+        let fs = r.replay_block(&minimal_block(2)).unwrap();
+        assert_eq!(fs.work_head_in, vec![0, 0]);
+        assert_eq!(fs.work_head_out, vec![0, 0]);
+    }
+
+    #[test]
+    fn interface_ok_checks_ctrl_and_input_head() {
+        let r = Replay::new();
+        let mut a = r.replay_block(&minimal_block(1)).unwrap();
+        let mut b = r.replay_block(&minimal_block(1)).unwrap();
+        a.ctrl_out = 7;
+        b.ctrl_in = 7;
+        a.in_head_out = 11;
+        b.in_head_in = 11;
+        assert!(r.interface_ok(&a, &b));
+        b.in_head_in = 12;
+        assert!(!r.interface_ok(&a, &b));
     }
 }

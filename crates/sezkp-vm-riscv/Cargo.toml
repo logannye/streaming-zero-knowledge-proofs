@@ -9,9 +9,11 @@ publish = false
 [dependencies]
 anyhow = "1"
 hex = "0.4"
+
+# Workspace crates
+sezkp-core   = { path = "../sezkp-core" }
+sezkp-crypto = { path = "../sezkp-crypto" }
 sezkp-merkle = { path = "../sezkp-merkle" }
 sezkp-stark  = { path = "../sezkp-stark" }
 sezkp-trace  = { path = "../sezkp-trace" }
-sezkp-core   = { path = "../sezkp-core" }
-sezkp-crypto = { path = "../sezkp-crypto" }
-sezkp-fold = { path = "../sezkp-fold" }
+sezkp-fold   = { path = "../sezkp-fold" }

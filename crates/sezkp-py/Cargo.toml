@@ -7,18 +7,19 @@ description = "Python bindings for SEZKP (feature-gated; off by default)"
 publish = false
 
 [lib]
-# Default to a normal Rust library so workspace builds cleanly.
-# When publishing a Python extension, you can build with:
-#   cargo build -p sezkp-py --features python --release
+# Default to a normal Rust library so the workspace builds cleanly.
+# For distributing a Python extension, you’ll usually want: crate-type = ["cdylib", "rlib"]
+# (PyO3 + abi3 produce a stable binary compatible with Python ≥ 3.8)
 crate-type = ["rlib"]
 
 [features]
-# Enable to compile a CPython extension module.
+# Enable to compile a CPython extension module with PyO3.
 python = ["dep:pyo3"]
 
 [dependencies]
 anyhow = "1"
 sezkp-core = { path = "../sezkp-core" }
 
-# Optional; only compiled if `python` feature is enabled
+# Optional; only compiled if the `python` feature is enabled.
+# We use abi3 (py38+) to avoid per-Python-version rebuilds in many cases.
 pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"], optional = true }
