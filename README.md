@@ -251,7 +251,7 @@ Issues and PRs are welcome. If you change any hashing layout (leaf schema or par
 
 ## License
 
-Specify your license here (e.g., MIT/Apache-2.0) and include the appropriate `LICENSE` files.
+MIT and Apache-2.0 dual license.
 
 ---
 
