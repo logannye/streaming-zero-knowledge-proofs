@@ -1,1 +1,1 @@
-Please report vulnerabilities to security@yourdomain.example (placeholder).
+Please report vulnerabilities to admin@galenhealth.org.
