@@ -126,7 +126,8 @@ impl Evaluator {
 
                 start = start.saturating_add(2 * span);
             }
-            span = span.saturating_mul(2);
+            // Ensure forward progress even if doubling would overflow u32.
+            span = span.checked_mul(2).unwrap_or(t_blocks);
         }
 
         map.remove(&Key(1, t_blocks))
