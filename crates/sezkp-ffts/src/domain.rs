@@ -26,6 +26,22 @@ impl Pow2Domain {
     pub fn element(&self, i: usize) -> F {
         self.gen.pow(i as u64)
     }
+
+    /// Debug helper: construct with checks that `gen` has exact order `size`.
+    #[inline]
+    #[must_use]
+    pub fn new_checked(size_log2: usize, gen: F) -> Self {
+        let size = 1usize << size_log2;
+        debug_assert_eq!(gen.pow(size as u64), F::one(), "ω^(2^k) must be 1");
+        if size_log2 > 0 {
+            debug_assert_ne!(
+                gen.pow((size >> 1) as u64),
+                F::one(),
+                "ω must have exact order 2^k"
+            );
+        }
+        Self { size, gen }
+    }
 }
 
 /// Compute a `2^k` domain for Goldilocks. `1 <= k <= 32`.
