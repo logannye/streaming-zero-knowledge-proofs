@@ -2,11 +2,13 @@
 name = "sezkp-cli"
 version = "0.1.0"
 edition = "2021"
-description = "Command-line interface for SEZKP"
-license = "MIT"
+description = "Command-line interface for SEZKP (streaming, sublinear-space ZKP reference CLI)"
+license = "Apache-2.0 OR MIT"
 # Align with your workspace toolchain if set; adjust if needed.
 rust-version = "1.74"
 readme = "../../README.md"
+repository = "https://github.com/your-org/sezkp"
+documentation = "https://github.com/your-org/sezkp/tree/main/docs"
 keywords = ["zkp", "proofs", "stark", "folding", "cli"]
 categories = ["cryptography::cryptocurrencies", "command-line-utilities"]
 
@@ -23,7 +25,7 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
-# Workspace path deps (kept as-is)
+# Workspace path deps
 sezkp-core   = { path = "../sezkp-core" }
 sezkp-trace  = { path = "../sezkp-trace" }
 sezkp-merkle = { path = "../sezkp-merkle" }
@@ -31,4 +33,4 @@ sezkp-stark  = { path = "../sezkp-stark" }
 sezkp-fold   = { path = "../sezkp-fold" }
 
 [dev-dependencies]
-# (none for now)
+# Keep tests lightweight at the CLI boundary.
