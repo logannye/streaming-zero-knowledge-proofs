@@ -31,8 +31,10 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 /// 64-bit prime field element (const generic modulus).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Fp64<const P: u64>(/// Canonical representative modulo `P`. Public for convenience.
-pub u64);
+pub struct Fp64<const P: u64>(
+    /// Canonical representative modulo `P`. Public for convenience.
+    pub u64,
+);
 
 impl<const P: u64> Fp64<P> {
     /// Zero.
