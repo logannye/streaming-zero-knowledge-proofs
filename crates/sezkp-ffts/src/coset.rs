@@ -21,6 +21,17 @@ pub struct CosetDomain {
 }
 
 impl CosetDomain {
+    /// Construct a coset from a base domain and a non-zero shift.
+    ///
+    /// # Panics
+    /// Panics in debug builds if `shift == 0`.
+    #[inline]
+    #[must_use]
+    pub fn new(base: Pow2Domain, shift: F) -> Self {
+        debug_assert!(shift != F::zero(), "coset shift must be non-zero");
+        Self { base, shift }
+    }
+
     /// Number of elements in the coset (same as base).
     #[inline]
     #[must_use]
@@ -43,8 +54,7 @@ impl CosetDomain {
 #[inline]
 #[must_use]
 pub fn coset_from_pow2(base: Pow2Domain, shift: F) -> CosetDomain {
-    debug_assert!(shift != F::zero(), "coset shift must be non-zero");
-    CosetDomain { base, shift }
+    CosetDomain::new(base, shift)
 }
 
 /// Convenience: pick a default shift for a given `2^k` base domain.
@@ -66,13 +76,19 @@ pub fn default_coset(base: Pow2Domain) -> CosetDomain {
 /// of **shift-scaled coefficients** `g_j = coeff_j * shift^j`.
 ///
 /// Semantics when `coeffs.len() > 2^k`: we **truncate** to the first `2^k`
-/// coefficients (i.e., arithmetic modulo `x^{2^k} - 1`).
+/// coefficients (i.e., arithmetic modulo `x^{2^k} - 1`). When `coeffs.len() < 2^k`,
+/// we zero-pad the higher coefficients.
+///
+/// # Panics
+/// Debug builds assert `shift != 0` and `k_log2 > 0`.
 #[must_use]
 pub fn evaluate_on_coset_pow2(coeffs: &[F], k_log2: usize, shift: F) -> Vec<F> {
+    debug_assert!(k_log2 > 0, "domain size must be at least 2");
     debug_assert!(shift != F::zero(), "coset shift must be non-zero");
+
     let n = 1usize << k_log2;
 
-    // Scale coefficients by shift^j and zero-pad to n.
+    // Scale coefficients by shift^j and zero-pad/truncate to n.
     let mut scaled = vec![F::from_u64(0); n];
     let mut pow = F::from_u64(1);
     let m = coeffs.len().min(n);
