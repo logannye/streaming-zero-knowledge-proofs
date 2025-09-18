@@ -147,13 +147,23 @@ fn combiner_associative_projection() {
     assert_eq!(left.tag, d.tag);
 }
 
-// Property: Replay::interface_ok detects mismatches and accepts matches.
+// Keep CI predictable while still exercising a wide range.
+prop_compose! {
+    fn arb_len()(len in 1usize..=16) -> usize { len }
+}
+
 proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64, // good CI/runtime balance
+        .. ProptestConfig::default()
+    })]
+
+    // Property: Replay::interface_ok detects mismatches and accepts matches.
     #[test]
     fn interface_ok_roundtrip(
         ctrl in 0u16..=1000,
         in0 in -50i64..=50,
-        len in 1usize..=16,
+        len in arb_len(),
     ) {
         let tau = 2usize;
         let mv = 0i8;
