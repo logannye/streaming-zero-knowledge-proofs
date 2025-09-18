@@ -7,6 +7,7 @@
 //! ## What’s exported with `--features cabi`
 //! - `sezkp_abi_version() -> uint32_t`: a stable ABI contract version (not the crate version).
 //! - `sezkp_version() -> const char*`: a NUL-terminated UTF-8 semver string for this crate.
+//! - `version_cstr() -> &'static std::ffi::CStr`: **safe** Rust accessor for tests and callers.
 //!
 //! ```bash
 //! cargo build -p sezkp-ffi --features cabi
@@ -47,7 +48,7 @@
 
 #[cfg(feature = "cabi")]
 mod cabi {
-    use std::ffi::CString;
+    use std::ffi::{CStr, CString};
     use std::os::raw::c_char;
     use std::sync::OnceLock;
 
@@ -68,27 +69,34 @@ mod cabi {
 
     /// Return a pointer to a static, NUL-terminated version string.
     ///
-    /// # Safety
+    /// # Safety for C callers
     /// - Returns a valid, immutable pointer for the duration of the program.
     /// - The caller must **not** free this pointer.
-    ///
-    /// # Example (C)
-    /// ```c
-    /// const char* v = sezkp_version();
-    /// printf("version: %s\n", v);
-    /// ```
     #[no_mangle]
     pub extern "C" fn sezkp_version() -> *const c_char {
-        let cstr = VERSION_CSTR.get_or_init(|| {
-            // Safe: `CARGO_PKG_VERSION` never contains interior NULs.
-            CString::new(env!("CARGO_PKG_VERSION")).expect("valid version cstring")
-        });
-        cstr.as_ptr()
+        // Safe on the Rust side: we never expose mutation or free.
+        version_cstr().as_ptr()
+    }
+
+    /// Safe Rust accessor for the version C string.
+    ///
+    /// Prefer this over calling `sezkp_version()` in Rust tests; avoids `unsafe`.
+    #[inline]
+    #[must_use]
+    pub fn version_cstr() -> &'static CStr {
+        VERSION_CSTR
+            .get_or_init(|| {
+                // Safe: `CARGO_PKG_VERSION` never contains interior NULs.
+                CString::new(env!("CARGO_PKG_VERSION")).expect("valid version cstring")
+            })
+            .as_c_str()
     }
 }
 
 #[cfg(feature = "cabi")]
 pub use cabi::{sezkp_abi_version, sezkp_version};
+#[cfg(feature = "cabi")]
+pub use cabi::version_cstr;
 
 #[cfg(not(feature = "cabi"))]
 mod no_cabi {
@@ -107,13 +115,10 @@ mod tests {
     #[cfg(feature = "cabi")]
     #[test]
     fn abi_and_version_present() {
-        // Smoke tests that symbols exist and return plausible values.
+        // Smoke tests that symbols exist and return plausible values—no `unsafe` needed.
         let abi = super::sezkp_abi_version();
         assert!(abi >= 1);
-        let v = unsafe {
-            // Safe: sezkp_version guarantees a static, non-null, valid C string pointer.
-            std::ffi::CStr::from_ptr(super::sezkp_version())
-        };
+        let v = super::version_cstr();
         assert!(!v.to_bytes().is_empty());
     }
 
