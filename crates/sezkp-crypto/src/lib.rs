@@ -170,6 +170,16 @@ pub trait TranscriptExt: Transcript {
         self.absorb(label.as_str(), bytes);
     }
 
+    /// Absorb an iterator of byte slices under the same label (zero-copy).
+    fn absorb_bytes_iter<'a, I>(&mut self, label: &str, chunks: I)
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        for c in chunks {
+            self.absorb(label, c);
+        }
+    }
+
     /// Squeeze `n` bytes as a challenge under a canonical [`Label`].
     #[must_use]
     fn challenge_bytes_label(&mut self, label: Label, n: usize) -> Vec<u8> {
