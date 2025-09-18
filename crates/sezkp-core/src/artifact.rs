@@ -47,7 +47,7 @@ pub enum BackendKind {
 /// opaque blob. The `meta` field is free-form JSON intended for diagnostics or
 /// light telemetry (e.g., timing, parameter choices). **Avoid** parsing `meta`
 /// in critical paths; instead, expose stable fields if you need them.
-/// 
+///
 /// **Invariants**
 /// - `manifest_root` must match the root used during proving.
 /// - `backend` must reflect the backend that produced `proof_bytes`; verifiers
@@ -160,6 +160,7 @@ mod tests {
             backend: &'a str,
             manifest_root: [u8; 32],
             proof_bytes: &'a [u8],
+            #[serde(default)]
             meta: serde_json::Value,
         }
 
