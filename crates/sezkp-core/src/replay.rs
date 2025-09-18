@@ -69,13 +69,15 @@ impl Replay {
         // ---- Structural checks ----
         ensure!(
             sigma.head_in_offsets.len() == tau,
-            "head_in_offsets length {} != windows length {}",
+            "block {}: head_in_offsets length {} != windows length {}",
+            sigma.block_id,
             sigma.head_in_offsets.len(),
             tau
         );
         ensure!(
             sigma.head_out_offsets.len() == tau,
-            "head_out_offsets length {} != windows length {}",
+            "block {}: head_out_offsets length {} != windows length {}",
+            sigma.block_id,
             sigma.head_out_offsets.len(),
             tau
         );
@@ -86,7 +88,8 @@ impl Replay {
             let w = sigma.windows[r];
             ensure!(
                 w.right >= w.left,
-                "invalid window on tape {}: right < left ({} < {})",
+                "block {}: invalid window on tape {}: right < left ({} < {})",
+                sigma.block_id,
                 r,
                 w.right,
                 w.left
@@ -94,12 +97,14 @@ impl Replay {
             let off_in = sigma
                 .head_in_offsets
                 .get(r)
-                .with_context(|| format!("missing head_in_offsets[{r}]"))?;
+                .with_context(|| format!("block {}: missing head_in_offsets[{r}]", sigma.block_id))?;
+            let win_len = w.right - w.left;
             ensure!(
-                (*off_in as i64) <= (w.right - w.left),
-                "entry offset {} out of window range [0, {}] on tape {}",
+                *off_in as i64 >= 0 && (*off_in as i64) <= win_len,
+                "block {}: entry offset {} out of window range [0, {}] on tape {}",
+                sigma.block_id,
                 off_in,
-                (w.right - w.left),
+                win_len,
                 r
             );
             let base = w.left;
@@ -116,7 +121,8 @@ impl Replay {
             let mv = step.input_mv;
             ensure!(
                 (-1..=1).contains(&mv),
-                "input head move must be in {{-1,0,1}}, got {} at step {}",
+                "block {}: input head move must be in {{-1,0,1}}, got {} at step {}",
+                sigma.block_id,
                 mv,
                 sidx
             );
@@ -124,7 +130,8 @@ impl Replay {
 
             ensure!(
                 step.tapes.len() == tau,
-                "step {} has {} tape ops, expected {}",
+                "block {}: step {} has {} tape ops, expected {}",
+                sigma.block_id,
                 sidx,
                 step.tapes.len(),
                 tau
@@ -133,7 +140,8 @@ impl Replay {
             for (r, op) in step.tapes.iter().enumerate() {
                 ensure!(
                     (-1..=1).contains(&op.mv),
-                    "tape {} head move must be in {{-1,0,1}}, got {} at step {}",
+                    "block {}: tape {} head move must be in {{-1,0,1}}, got {} at step {}",
+                    sigma.block_id,
                     r,
                     op.mv,
                     sidx
@@ -144,7 +152,8 @@ impl Replay {
                     let w = sigma.windows[r];
                     if cur_heads[r] < w.left || cur_heads[r] > w.right {
                         bail!(
-                            "write outside window on tape {} at step {}: pos={}, window=[{},{}]",
+                            "block {}: write outside window on tape {} at step {}: pos={}, window=[{},{}]",
+                            sigma.block_id,
                             r,
                             sidx,
                             cur_heads[r],
@@ -160,15 +169,16 @@ impl Replay {
         let mut work_out = Vec::with_capacity(tau);
         for r in 0..tau {
             let w = sigma.windows[r];
-            let off_out = sigma
-                .head_out_offsets
-                .get(r)
-                .with_context(|| format!("missing head_out_offsets[{r}]"))?;
+            let off_out = sigma.head_out_offsets.get(r).with_context(|| {
+                format!("block {}: missing head_out_offsets[{r}]", sigma.block_id)
+            })?;
+            let win_len = w.right - w.left;
             ensure!(
-                (*off_out as i64) <= (w.right - w.left),
-                "exit offset {} out of window range [0, {}] on tape {}",
+                *off_out as i64 >= 0 && (*off_out as i64) <= win_len,
+                "block {}: exit offset {} out of window range [0, {}] on tape {}",
+                sigma.block_id,
                 off_out,
-                (w.right - w.left),
+                win_len,
                 r
             );
             let base = w.left;
