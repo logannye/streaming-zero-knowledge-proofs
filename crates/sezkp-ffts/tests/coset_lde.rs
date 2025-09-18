@@ -1,4 +1,9 @@
 //! Coset LDE tests.
+//!
+//! Invariants tested:
+//! 1) `shift = 1` matches plain NTT on the base subgroup.
+//! 2) Scaling-by-`shift^j` in coefficient space equals evaluating the original
+//!    polynomial on the multiplicative coset with that `shift`.
 
 #![forbid(unsafe_code)]
 #![deny(rust_2018_idioms)]
