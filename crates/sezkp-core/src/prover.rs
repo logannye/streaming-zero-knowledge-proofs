@@ -15,6 +15,9 @@ use crate::replay::{Replay, ReplayConfig};
 
 /// Optional **push-based** interface a backend can implement to support
 /// truly streaming proving without collecting all blocks.
+///
+/// Implementors should assume the caller *already* ran ARE checks and
+/// interface checks before calling [`ProvingBackendStream::ingest_block`].
 pub trait ProvingBackendStream {
     /// Opaque backend streaming state.
     type StreamState;
@@ -118,7 +121,7 @@ impl<B: ProvingBackend> StreamingProver<B> {
             // 1) Local bounded-window ARE check → returns FiniteState
             let fs = sp.replay.replay_block(&block).map_err(|e| {
                 anyhow!(
-                    "ARE validation failed for block index {} (block_id={}): {e}",
+                    "ARE validation failed at block index {} (block_id={}): {e}",
                     idx,
                     block.block_id
                 )
@@ -128,9 +131,11 @@ impl<B: ProvingBackend> StreamingProver<B> {
             if let Some(p) = &prev {
                 if !sp.replay.interface_ok(p, &fs) {
                     return Err(anyhow!(
-                        "interface mismatch at boundary {}→{}: (ctrl_out,in_head_out) != (ctrl_in,in_head_in)",
+                        "interface mismatch at boundary {}→{} (block_id={}): \
+                         (ctrl_out,in_head_out) != (ctrl_in,in_head_in)",
                         idx.saturating_sub(1),
-                        idx
+                        idx,
+                        block.block_id
                     ));
                 }
             }
@@ -170,7 +175,7 @@ impl<B: ProvingBackend> StreamingProver<B> {
 
             let fs = sp.replay.replay_block(&block).map_err(|e| {
                 anyhow!(
-                    "ARE validation failed for block index {} (block_id={}): {e}",
+                    "ARE validation failed at block index {} (block_id={}): {e}",
                     idx,
                     block.block_id
                 )
@@ -179,9 +184,11 @@ impl<B: ProvingBackend> StreamingProver<B> {
             if let Some(p) = &prev {
                 if !sp.replay.interface_ok(p, &fs) {
                     return Err(anyhow!(
-                        "interface mismatch at boundary {}→{}: (ctrl_out,in_head_out) != (ctrl_in,in_head_in)",
+                        "interface mismatch at boundary {}→{} (block_id={}): \
+                         (ctrl_out,in_head_out) != (ctrl_in,in_head_in)",
                         idx.saturating_sub(1),
-                        idx
+                        idx,
+                        block.block_id
                     ));
                 }
             }
@@ -205,7 +212,7 @@ impl<B: ProvingBackend> StreamingProver<B> {
         for (idx, b) in blocks.iter().enumerate() {
             let fs = self.replay.replay_block(b).map_err(|e| {
                 anyhow!(
-                    "ARE validation failed for block index {} (block_id={}): {e}",
+                    "ARE validation failed at block index {} (block_id={}): {e}",
                     idx,
                     b.block_id
                 )
