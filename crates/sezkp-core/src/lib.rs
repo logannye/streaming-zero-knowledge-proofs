@@ -65,3 +65,15 @@ pub use types::*;
 
 /// Explicitly re-export the streaming trait so backends can implement it.
 pub use prover::ProvingBackendStream;
+
+/// Commonly-used items for quick imports.
+///
+/// ```rust
+/// use sezkp_core::prelude::*;
+/// ```
+pub mod prelude {
+    pub use crate::{
+        artifact::ProofArtifact, backend::ProvingBackend, prover::StreamingProver, types::*,
+    };
+    pub use crate::prover::ProvingBackendStream;
+}
