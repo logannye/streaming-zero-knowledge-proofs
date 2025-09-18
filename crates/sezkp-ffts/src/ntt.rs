@@ -5,7 +5,7 @@
 //!
 //! Design notes:
 //! - Uses bit-reversed reordering (DIT) and per-stage twiddle tables.
-//! - Twiddles are computed per call and kept local; for repeated sizes you may
+////! - Twiddles are computed per call and kept local; for repeated sizes you may
 //!   consider caching twiddles externally.
 //! - Length `n` must be a power of two.
 
