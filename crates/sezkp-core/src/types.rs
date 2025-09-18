@@ -34,6 +34,13 @@ impl Window {
         Self { left, right }
     }
 
+    /// Returns `true` if `self.right >= self.left`.
+    #[inline]
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.right >= self.left
+    }
+
     /// Length of the window as a count of cells (0 if inverted).
     #[inline]
     #[must_use]
@@ -53,8 +60,15 @@ impl Window {
     }
 }
 
+impl From<(Cell, Cell)> for Window {
+    #[inline]
+    fn from((left, right): (Cell, Cell)) -> Self {
+        Self { left, right }
+    }
+}
+
 /// Movement for a single tape in {-1, 0, +1}.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct TapeOp {
     /// Optional write (`None` ⇒ no write).
     pub write: Option<SymbolId>,
@@ -69,10 +83,17 @@ impl TapeOp {
     pub const fn new(write: Option<SymbolId>, mv: i8) -> Self {
         Self { write, mv }
     }
+
+    /// Returns `true` if `mv ∈ {-1,0,1}` (best-effort self-check).
+    #[inline]
+    #[must_use]
+    pub fn is_unit_move(&self) -> bool {
+        matches!(self.mv, -1 | 0 | 1)
+    }
 }
 
 /// A single replay step projection (input move + τ per-tape ops).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct StepProjection {
     /// Input head move in `{-1,0,+1}`.
     pub input_mv: i8,
@@ -81,7 +102,7 @@ pub struct StepProjection {
 }
 
 /// Compact per-block movement log (restricted to touched windows).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct MovementLog {
     /// Replay steps (length ≤ block size).
     pub steps: Vec<StepProjection>,
@@ -221,6 +242,7 @@ mod tests {
         assert!(!w.contains(3));
         let bad = Window::new(5, 1);
         assert_eq!(bad.len(), 0);
+        assert!(!bad.is_valid());
     }
 
     #[test]
