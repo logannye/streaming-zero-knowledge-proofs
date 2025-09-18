@@ -11,6 +11,7 @@
 //! # Formats
 //! We treat both `.jsonl` and `.ndjson` as equivalent line-delimited JSON.
 
+#![allow(unused_imports)]
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs::File;
