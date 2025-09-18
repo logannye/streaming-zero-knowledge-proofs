@@ -48,6 +48,7 @@ fn bench_ntt(c: &mut Criterion) {
         group.bench_function(
             BenchmarkId::new("forward_ntt_in_place", format!("2^{k}")),
             |b| {
+                // LargeInput: clone is part of the measured cost envelope in realistic usage.
                 b.iter_batched(
                     || black_box(base.clone()),
                     |mut v| {
@@ -59,7 +60,7 @@ fn bench_ntt(c: &mut Criterion) {
             },
         );
 
-        // Precompute forward evals for inverse NTT bench.
+        // Precompute forward evals for inverse NTT bench (so the INTT input is “valid”).
         let mut evals = base.clone();
         forward_ntt_in_place(&mut evals);
 
