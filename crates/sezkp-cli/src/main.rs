@@ -37,12 +37,12 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use sezkp_core::ProvingBackend;
 use sezkp_core::{
     io::{
         read_block_summaries_auto, read_proof_auto, stream_block_summaries_auto, write_proof_auto,
     },
     ProofArtifact,
+    ProvingBackend,
 };
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -50,7 +50,21 @@ use std::path::{Path, PathBuf};
 use tracing::{info, info_span};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Environment keys used by backends (centralized to avoid typos).
+mod envkeys {
+    pub const FOLD_MODE: &str = "SEZKP_FOLD_MODE";
+    pub const FOLD_CACHE: &str = "SEZKP_FOLD_CACHE";
+    pub const WRAP_CADENCE: &str = "SEZKP_WRAP_CADENCE";
+    pub const PROOF_STREAM_PATH: &str = "SEZKP_PROOF_STREAM_PATH";
+}
+
 /// Top-level CLI.
+///
+/// NOTE on streaming discipline:
+/// - When possible, use `--stream` with `.jsonl`/`.ndjson` blocks to keep the prover/verifier
+///   in sublinear space (aggregate-only FS inputs; no materialized full trace).
+/// - For `.cbor`/`.json` inputs, streaming may degrade to buffered iteration depending on the
+///   chosen backend; consult docs for precise guarantees.
 #[derive(Parser, Debug)]
 #[command(
     name = "sezkp-cli",
@@ -127,6 +141,8 @@ enum Cmd {
         backend: BackendOpt,
 
         /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
+        ///
+        /// For sublinear memory, prefer `.jsonl`/`.ndjson` + `--stream`.
         #[arg(long)]
         blocks: PathBuf,
 
@@ -171,6 +187,8 @@ enum Cmd {
         backend: BackendOpt,
 
         /// Input path to σ_k block summaries (CBOR/JSON/JSONL/NDJSON).
+        ///
+        /// For sublinear memory, prefer `.jsonl`/`.ndjson`.
         #[arg(long)]
         blocks: PathBuf,
 
@@ -443,14 +461,14 @@ fn prove(
     // Honor fold-driver flags via env vars the backend reads at prove-time.
     if matches!(backend, BackendOpt::Fold) {
         std::env::set_var(
-            "SEZKP_FOLD_MODE",
+            envkeys::FOLD_MODE,
             match fold_mode {
                 FoldModeOpt::Balanced => "balanced",
                 FoldModeOpt::Minram => "minram",
             },
         );
-        std::env::set_var("SEZKP_FOLD_CACHE", fold_cache.to_string());
-        std::env::set_var("SEZKP_WRAP_CADENCE", wrap_cadence.to_string());
+        std::env::set_var(envkeys::FOLD_CACHE, fold_cache.to_string());
+        std::env::set_var(envkeys::WRAP_CADENCE, wrap_cadence.to_string());
     }
 
     // Choose streaming path iff requested.
@@ -462,7 +480,7 @@ fn prove(
             let mut stream_path = out.clone();
             stream_path.set_extension("cborseq");
             // Tell the backend where to write the streaming proof.
-            std::env::set_var("SEZKP_PROOF_STREAM_PATH", &stream_path);
+            std::env::set_var(envkeys::PROOF_STREAM_PATH, &stream_path);
 
             let iter = stream_block_summaries_auto(&blocks).context("open blocks stream")?;
             let art = StreamingProver::<FoldAgg>::prove_stream_iter(iter, man.root)
@@ -574,5 +592,14 @@ mod tests {
             "--out",
             "manifest.cbor",
         ]);
+    }
+
+    #[test]
+    fn jsonl_like_detection() {
+        assert!(is_jsonl_like(Path::new("x.jsonl")));
+        assert!(is_jsonl_like(Path::new("x.ndjson")));
+        assert!(!is_jsonl_like(Path::new("x.json")));
+        assert!(!is_jsonl_like(Path::new("x.cbor")));
+        assert!(!is_jsonl_like(Path::new("x")));
     }
 }
